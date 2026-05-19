@@ -26,10 +26,10 @@ import requests
 SERPAPI_URL = "https://serpapi.com/search"
 
 CSV_FIELDS = [
-    "place_id", "title", "phone", "address", "type", "rating",
-    "reviews", "price", "description", "hours", "website",
-    "directions_url", "latitude", "longitude",
-    "source_query", "source_location",
+    "position", "place_id", "title", "phone", "address", "type", "rating",
+    "reviews", "reviews_original", "price", "description", "hours", "website",
+    "directions_url", "thumbnail", "place_id_search",
+    "latitude", "longitude", "source_query", "source_location",
 ]
 
 
@@ -94,6 +94,7 @@ def scrape_one(query, location, api_key):
         gps = r.get("gps_coordinates") or {}
         links = r.get("links") or {}
         rows.append({
+            "position": r.get("position", ""),
             "place_id": r.get("place_id", ""),
             "title": r.get("title", ""),
             "phone": r.get("phone", ""),
@@ -101,11 +102,14 @@ def scrape_one(query, location, api_key):
             "type": r.get("type", ""),
             "rating": r.get("rating", ""),
             "reviews": r.get("reviews", ""),
+            "reviews_original": r.get("reviews_original", ""),
             "price": r.get("price", ""),
             "description": r.get("description", ""),
             "hours": r.get("hours", ""),
             "website": links.get("website", ""),
             "directions_url": links.get("directions", ""),
+            "thumbnail": r.get("thumbnail", ""),
+            "place_id_search": r.get("place_id_search", ""),
             "latitude": gps.get("latitude", ""),
             "longitude": gps.get("longitude", ""),
             "source_query": query,
@@ -181,7 +185,7 @@ def main():
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
+    with open(output_path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         writer.writeheader()
         writer.writerows(deduped)
