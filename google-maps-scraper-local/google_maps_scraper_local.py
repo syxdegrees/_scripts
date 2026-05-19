@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-local_google_maps_scraper.py
+google_maps_scraper_local.py
 Scrapes Google Local Results via SerpApi and writes a deduplicated CSV.
 
 Dependencies: pip install requests
 
 Usage:
-    python local_google_maps_scraper.py \
+    python google_maps_scraper_local.py \
         --types "plumber,electrician" \
         --locations "Austin, TX,Dallas, TX" \
         --output "C:/Users/jeshj/Desktop/businesses.csv"
 
-Reads SERPAPI_API_KEY from environment or a .env file in the current directory.
+Reads SERPAPI_API_KEY from the .env file next to this script, then falls back
+to a .env in the current working directory, then the environment.
 """
 
 import argparse
@@ -32,7 +33,7 @@ CSV_FIELDS = [
 ]
 
 
-def load_env_file(path=".env"):
+def load_env_file(path):
     """Load key=value pairs from a .env file into os.environ (does not overwrite existing vars)."""
     if not os.path.exists(path):
         return
@@ -49,7 +50,10 @@ def load_env_file(path=".env"):
 
 
 def get_api_key():
-    load_env_file()
+    # Check .env next to the script first, then fall back to cwd .env
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    load_env_file(os.path.join(script_dir, ".env"))
+    load_env_file(os.path.join(os.getcwd(), ".env"))
     key = os.environ.get("SERPAPI_API_KEY", "").strip()
     if not key:
         print("ERROR: SERPAPI_API_KEY not found in environment or .env file.")
