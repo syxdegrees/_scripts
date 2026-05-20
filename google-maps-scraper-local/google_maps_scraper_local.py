@@ -217,14 +217,15 @@ def main():
         description="Scrape Google Local businesses via SerpApi"
     )
     parser.add_argument("--types", required=True, help="Comma-separated business types")
-    parser.add_argument("--locations", required=True, help="Comma-separated locations (City, State or lat,lng)")
+    parser.add_argument("--location", action="append", dest="locations", required=True,
+                        help="Location to search (repeat for multiple: --location 'Austin, TX' --location 'Dallas, TX')")
     parser.add_argument("--output", required=True, help="Output CSV file path")
     args = parser.parse_args()
 
     api_key = get_api_key()
 
     types = [t.strip() for t in args.types.split(",") if t.strip()]
-    locations = [loc.strip() for loc in args.locations.split(",") if loc.strip()]
+    locations = [loc.strip() for loc in args.locations if loc.strip()]
 
     if not types:
         print("ERROR: --types cannot be empty")
