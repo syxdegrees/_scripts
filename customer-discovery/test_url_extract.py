@@ -65,6 +65,22 @@ def test_deduplicate_null_title():
     assert result['https://example.com/1']['title'] == ''
 
 
+from url_extract import run_summary
+
+
+def test_run_summary_output(capsys):
+    rows = [
+        {'id': 'aaa', 'url': 'https://a.com', 'title': 'A'},
+        {'id': 'bbb', 'url': 'https://b.com', 'title': 'B'},
+        {'id': 'ccc', 'url': 'https://a.com', 'title': 'A'},  # duplicate
+    ]
+    with patch('url_extract.fetch_serp_results', return_value=rows):
+        run_summary('https://fake.supabase.co', 'fake-key', 'run-uuid-123')
+
+    captured = capsys.readouterr()
+    assert 'SUMMARY:run_id=run-uuid-123,total=3,unique=2,dupes=1' in captured.out
+
+
 def test_summary_only_flag_accepted():
     # With no env vars set, should error on SUPABASE_URL — not on unknown flag
     result = subprocess.run(

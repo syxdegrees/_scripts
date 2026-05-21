@@ -127,7 +127,12 @@ def deduplicate_by_url(rows):
 
 
 def run_summary(supabase_url, supabase_key, run_id):
-    pass  # implemented in Task 4
+    rows = fetch_serp_results(supabase_url, supabase_key, run_id)
+    grouped = deduplicate_by_url(rows)
+    total = len(rows)
+    unique = len(grouped)
+    dupes = total - unique
+    print(f"SUMMARY:run_id={run_id},total={total},unique={unique},dupes={dupes}")
 
 
 def run_extract(supabase_url, supabase_key, firecrawl_key, anthropic_key, run_id):
