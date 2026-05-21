@@ -188,6 +188,71 @@ def test_strip_fences_with_markdown():
     assert strip_fences('```json\n[1,2,3]\n```') == '[1,2,3]'
 
 
+from url_extract import save_voc_content, VOC_TABLE, JUNCTION_TABLE
+
+
+def test_save_voc_content_inserts_in_position_order():
+    items = [
+        {'content_type': 'original_post', 'body': 'Post body', 'author': 'alice', 'position': 1, 'parent_position': None},
+        {'content_type': 'comment', 'body': 'Comment body', 'author': 'bob', 'position': 2, 'parent_position': 1},
+    ]
+    inserted_ids = ['uuid-1', 'uuid-2']
+    call_count = [0]
+
+    def mock_post(url, headers=None, json=None, timeout=None):
+        resp = MagicMock()
+        resp.ok = True
+        if JUNCTION_TABLE in url:
+            resp.json.return_value = []
+        elif VOC_TABLE in url:
+            idx = call_count[0]
+            resp.json.return_value = [{'id': inserted_ids[idx]}]
+            call_count[0] += 1
+        else:
+            resp.json.return_value = []
+        return resp
+
+    with patch('url_extract.requests.post', side_effect=mock_post):
+        count = save_voc_content(
+            'https://fake.supabase.co', 'fake-key',
+            'run-uuid', 'https://example.com', 'Page Title',
+            items, ['serp-id-1', 'serp-id-2']
+        )
+
+    assert count == 2
+
+
+def test_save_voc_content_sets_parent_id():
+    items = [
+        {'content_type': 'original_post', 'body': 'Post', 'author': None, 'position': 1, 'parent_position': None},
+        {'content_type': 'comment', 'body': 'Reply', 'author': None, 'position': 2, 'parent_position': 1},
+    ]
+    inserted_payloads = []
+
+    def mock_post(url, headers=None, json=None, timeout=None):
+        resp = MagicMock()
+        resp.ok = True
+        if JUNCTION_TABLE in url:
+            resp.json.return_value = []
+        elif VOC_TABLE in url and isinstance(json, dict):
+            inserted_payloads.append(json)
+            idx = len(inserted_payloads) - 1
+            resp.json.return_value = [{'id': f'uuid-{idx + 1}'}]
+        else:
+            resp.json.return_value = []
+        return resp
+
+    with patch('url_extract.requests.post', side_effect=mock_post):
+        save_voc_content(
+            'https://fake.supabase.co', 'fake-key',
+            'run-uuid', 'https://example.com', 'Title',
+            items, ['serp-id-1']
+        )
+
+    assert inserted_payloads[0]['parent_id'] is None
+    assert inserted_payloads[1]['parent_id'] == 'uuid-1'
+
+
 def test_summary_only_flag_accepted():
     # With no env vars set, should error on SUPABASE_URL — not on unknown flag
     result = subprocess.run(

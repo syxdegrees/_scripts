@@ -185,6 +185,67 @@ def fetch_firecrawl(api_key, url):
     return markdown
 
 
+def save_voc_content(supabase_url, secret_key, run_id, url, title, items, serp_result_ids):
+    """Insert voc_content rows in ascending position order, then junction rows.
+
+    Returns count of voc_content rows inserted.
+    Rows MUST be inserted in position order — parent_id lookup depends on it.
+    """
+    headers_repr = {**_supabase_headers(secret_key), 'Prefer': 'return=representation'}
+    headers_min = {**_supabase_headers(secret_key), 'Prefer': 'return=minimal'}
+
+    position_to_id = {}
+    items_saved = 0
+
+    for item in sorted(items, key=lambda x: x.get('position', 0)):
+        position = item.get('position')
+        parent_position = item.get('parent_position')
+        parent_id = position_to_id.get(parent_position) if parent_position else None
+
+        row = {
+            'run_id': run_id,
+            'url': url,
+            'title': title or None,
+            'content_type': item.get('content_type', 'comment'),
+            'parent_id': parent_id,
+            'body': item.get('body', ''),
+            'author': item.get('author') or None,
+            'position': position,
+            'source': 'url_extraction',
+        }
+        resp = requests.post(
+            f"{supabase_url}/rest/v1/{VOC_TABLE}",
+            headers=headers_repr,
+            json=row,
+            timeout=30,
+        )
+        if not resp.ok:
+            raise RuntimeError(f"voc_content insert failed: {resp.status_code} {resp.text}")
+
+        inserted_id = resp.json()[0]['id']
+        position_to_id[position] = inserted_id
+        items_saved += 1
+
+        junction_rows = [
+            {'voc_content_id': inserted_id, 'serp_result_id': sid}
+            for sid in serp_result_ids
+        ]
+        j_resp = requests.post(
+            f"{supabase_url}/rest/v1/{JUNCTION_TABLE}",
+            headers=headers_min,
+            json=junction_rows,
+            timeout=30,
+        )
+        if not j_resp.ok:
+            print(
+                f"WARNING: junction insert failed for item {inserted_id}: "
+                f"{j_resp.status_code} {j_resp.text}",
+                file=sys.stderr,
+            )
+
+    return items_saved
+
+
 def run_summary(supabase_url, supabase_key, run_id):
     rows = fetch_serp_results(supabase_url, supabase_key, run_id)
     grouped = deduplicate_by_url(rows)
