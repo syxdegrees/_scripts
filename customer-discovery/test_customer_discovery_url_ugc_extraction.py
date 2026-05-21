@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-SCRIPT = str(Path(__file__).parent / 'url_extract.py')
+SCRIPT = str(Path(__file__).parent / 'customer_discovery_url_ugc_extraction.py')
 
 
 def test_help_exits_zero():
@@ -24,7 +24,7 @@ def test_missing_run_id_exits_nonzero():
     assert result.returncode != 0
 
 
-from url_extract import deduplicate_by_url
+from customer_discovery_url_ugc_extraction import deduplicate_by_url
 
 
 def test_deduplicate_no_dupes():
@@ -65,7 +65,7 @@ def test_deduplicate_null_title():
     assert result['https://example.com/1']['title'] == ''
 
 
-from url_extract import run_summary
+from customer_discovery_url_ugc_extraction import run_summary
 
 
 def test_run_summary_output(capsys):
@@ -74,14 +74,14 @@ def test_run_summary_output(capsys):
         {'id': 'bbb', 'url': 'https://b.com', 'title': 'B'},
         {'id': 'ccc', 'url': 'https://a.com', 'title': 'A'},  # duplicate
     ]
-    with patch('url_extract.fetch_serp_results', return_value=rows):
+    with patch('customer_discovery_url_ugc_extraction.fetch_serp_results', return_value=rows):
         run_summary('https://fake.supabase.co', 'fake-key', 'run-uuid-123')
 
     captured = capsys.readouterr()
     assert 'SUMMARY:run_id=run-uuid-123,total=3,unique=2,dupes=1' in captured.out
 
 
-from url_extract import fetch_firecrawl
+from customer_discovery_url_ugc_extraction import fetch_firecrawl
 
 
 def test_fetch_firecrawl_returns_markdown():
@@ -89,7 +89,7 @@ def test_fetch_firecrawl_returns_markdown():
     mock_resp.ok = True
     mock_resp.json.return_value = {'data': {'markdown': 'Hello world content here and more text. ' * 5}}
 
-    with patch('url_extract.requests.post', return_value=mock_resp):
+    with patch('customer_discovery_url_ugc_extraction.requests.post', return_value=mock_resp):
         result = fetch_firecrawl('fake-key', 'https://example.com')
 
     assert result == 'Hello world content here and more text. ' * 5
@@ -101,7 +101,7 @@ def test_fetch_firecrawl_raises_on_http_error():
     mock_resp.status_code = 403
     mock_resp.text = 'Forbidden'
 
-    with patch('url_extract.requests.post', return_value=mock_resp):
+    with patch('customer_discovery_url_ugc_extraction.requests.post', return_value=mock_resp):
         try:
             fetch_firecrawl('fake-key', 'https://example.com')
             assert False, 'Should have raised'
@@ -114,7 +114,7 @@ def test_fetch_firecrawl_raises_on_empty_response():
     mock_resp.ok = True
     mock_resp.json.return_value = {'data': {'markdown': 'short'}}
 
-    with patch('url_extract.requests.post', return_value=mock_resp):
+    with patch('customer_discovery_url_ugc_extraction.requests.post', return_value=mock_resp):
         try:
             fetch_firecrawl('fake-key', 'https://example.com')
             assert False, 'Should have raised'
@@ -122,7 +122,7 @@ def test_fetch_firecrawl_raises_on_empty_response():
             assert 'short' in str(e).lower() or 'empty' in str(e).lower()
 
 
-from url_extract import extract_voc, strip_fences
+from customer_discovery_url_ugc_extraction import extract_voc, strip_fences
 
 
 def _make_anthropic_response(text, stop_reason='end_turn'):
@@ -188,7 +188,7 @@ def test_strip_fences_with_markdown():
     assert strip_fences('```json\n[1,2,3]\n```') == '[1,2,3]'
 
 
-from url_extract import save_voc_content, VOC_TABLE, JUNCTION_TABLE
+from customer_discovery_url_ugc_extraction import save_voc_content, VOC_TABLE, JUNCTION_TABLE
 
 
 def test_save_voc_content_inserts_in_position_order():
@@ -212,7 +212,7 @@ def test_save_voc_content_inserts_in_position_order():
             resp.json.return_value = []
         return resp
 
-    with patch('url_extract.requests.post', side_effect=mock_post):
+    with patch('customer_discovery_url_ugc_extraction.requests.post', side_effect=mock_post):
         count = save_voc_content(
             'https://fake.supabase.co', 'fake-key',
             'run-uuid', 'https://example.com', 'Page Title',
@@ -242,7 +242,7 @@ def test_save_voc_content_sets_parent_id():
             resp.json.return_value = []
         return resp
 
-    with patch('url_extract.requests.post', side_effect=mock_post):
+    with patch('customer_discovery_url_ugc_extraction.requests.post', side_effect=mock_post):
         save_voc_content(
             'https://fake.supabase.co', 'fake-key',
             'run-uuid', 'https://example.com', 'Title',
@@ -253,7 +253,7 @@ def test_save_voc_content_sets_parent_id():
     assert inserted_payloads[1]['parent_id'] == 'uuid-1'
 
 
-from url_extract import run_extract
+from customer_discovery_url_ugc_extraction import run_extract
 
 
 def test_run_extract_full_flow(capsys):
@@ -284,10 +284,10 @@ def test_run_extract_full_flow(capsys):
             resp.json.return_value = []
         return resp
 
-    with patch('url_extract.fetch_serp_results', return_value=serp_rows), \
-         patch('url_extract.fetch_firecrawl', return_value='Some markdown content for extraction'), \
-         patch('url_extract.anthropic') as mock_anthropic_module, \
-         patch('url_extract.requests.post', side_effect=mock_post):
+    with patch('customer_discovery_url_ugc_extraction.fetch_serp_results', return_value=serp_rows), \
+         patch('customer_discovery_url_ugc_extraction.fetch_firecrawl', return_value='Some markdown content for extraction'), \
+         patch('customer_discovery_url_ugc_extraction.anthropic') as mock_anthropic_module, \
+         patch('customer_discovery_url_ugc_extraction.requests.post', side_effect=mock_post):
 
         mock_anthropic_module.Anthropic.return_value = mock_client
         run_extract('https://fake.supabase.co', 'fake-key', 'fc-key', 'ant-key', 'run-uuid')
@@ -303,9 +303,9 @@ def test_run_extract_full_flow(capsys):
 def test_run_extract_handles_firecrawl_failure(capsys):
     serp_rows = [{'id': 'serp-1', 'url': 'https://bad-url.com', 'title': 'Bad'}]
 
-    with patch('url_extract.fetch_serp_results', return_value=serp_rows), \
-         patch('url_extract.fetch_firecrawl', side_effect=RuntimeError('blocked')), \
-         patch('url_extract.anthropic') as mock_anthropic_module:
+    with patch('customer_discovery_url_ugc_extraction.fetch_serp_results', return_value=serp_rows), \
+         patch('customer_discovery_url_ugc_extraction.fetch_firecrawl', side_effect=RuntimeError('blocked')), \
+         patch('customer_discovery_url_ugc_extraction.anthropic') as mock_anthropic_module:
 
         mock_anthropic_module.Anthropic.return_value = MagicMock()
         run_extract('https://fake.supabase.co', 'fake-key', 'fc-key', 'ant-key', 'run-uuid')
