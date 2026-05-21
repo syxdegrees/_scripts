@@ -126,6 +126,45 @@ def deduplicate_by_url(rows):
     return grouped
 
 
+def strip_fences(text):
+    """Remove markdown code fences if present."""
+    text = text.strip()
+    if text.startswith('```'):
+        text = text.split('\n', 1)[1] if '\n' in text else text[3:]
+        text = text.rsplit('```', 1)[0].strip()
+    return text
+
+
+def extract_voc(client, markdown, title):
+    """Call Claude Haiku to extract structured VOC content.
+
+    Returns (items: list[dict], truncated: bool).
+    Raises RuntimeError on JSON parse failure.
+    """
+    user_msg = (
+        f"Page title (hint for identifying the original post): {title}\n\n"
+        f"Extract all user-generated content from this page:\n\n{markdown}"
+    )
+    message = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=8192,
+        system=EXTRACT_SYSTEM,
+        messages=[{'role': 'user', 'content': user_msg}],
+    )
+    truncated = message.stop_reason == 'max_tokens'
+    block = next((b for b in message.content if b.type == 'text'), None)
+    text = block.text if block else '[]'
+
+    try:
+        items = json.loads(strip_fences(text))
+        if not isinstance(items, list):
+            raise ValueError("Response is not a JSON array")
+    except (json.JSONDecodeError, ValueError) as e:
+        raise RuntimeError(f"Failed to parse Claude response as JSON: {e}")
+
+    return items, truncated
+
+
 def fetch_firecrawl(api_key, url):
     """Fetch URL via Firecrawl REST API. Returns markdown string or raises RuntimeError."""
     headers = {

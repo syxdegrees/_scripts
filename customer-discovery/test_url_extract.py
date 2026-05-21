@@ -122,6 +122,72 @@ def test_fetch_firecrawl_raises_on_empty_response():
             assert 'short' in str(e).lower() or 'empty' in str(e).lower()
 
 
+from url_extract import extract_voc, strip_fences
+
+
+def _make_anthropic_response(text, stop_reason='end_turn'):
+    msg = MagicMock()
+    msg.stop_reason = stop_reason
+    block = MagicMock()
+    block.type = 'text'
+    block.text = text
+    msg.content = [block]
+    return msg
+
+
+def test_extract_voc_returns_items():
+    payload = json.dumps([
+        {'content_type': 'original_post', 'body': 'Main post text', 'author': 'alice', 'position': 1, 'parent_position': None},
+        {'content_type': 'comment', 'body': 'A reply here', 'author': 'bob', 'position': 2, 'parent_position': 1},
+    ])
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = _make_anthropic_response(payload)
+
+    items, truncated = extract_voc(mock_client, 'Some markdown content', 'Page Title')
+
+    assert len(items) == 2
+    assert items[0]['content_type'] == 'original_post'
+    assert items[1]['parent_position'] == 1
+    assert truncated is False
+
+
+def test_extract_voc_detects_truncation():
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = _make_anthropic_response('[]', stop_reason='max_tokens')
+
+    _, truncated = extract_voc(mock_client, 'content', 'title')
+    assert truncated is True
+
+
+def test_extract_voc_strips_fences():
+    payload = '```json\n[{"content_type":"comment","body":"hi","author":null,"position":1,"parent_position":null}]\n```'
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = _make_anthropic_response(payload)
+
+    items, _ = extract_voc(mock_client, 'content', 'title')
+    assert len(items) == 1
+    assert items[0]['body'] == 'hi'
+
+
+def test_extract_voc_raises_on_bad_json():
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = _make_anthropic_response('not json at all')
+
+    try:
+        extract_voc(mock_client, 'content', 'title')
+        assert False, 'Should have raised'
+    except RuntimeError as e:
+        assert 'parse' in str(e).lower() or 'json' in str(e).lower()
+
+
+def test_strip_fences_plain_json():
+    assert strip_fences('[1,2,3]') == '[1,2,3]'
+
+
+def test_strip_fences_with_markdown():
+    assert strip_fences('```json\n[1,2,3]\n```') == '[1,2,3]'
+
+
 def test_summary_only_flag_accepted():
     # With no env vars set, should error on SUPABASE_URL — not on unknown flag
     result = subprocess.run(
