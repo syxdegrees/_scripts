@@ -96,6 +96,36 @@ def main():
     run_extract(supabase_url, supabase_key, firecrawl_key, anthropic_key, args.run_id)
 
 
+def _supabase_headers(secret_key):
+    return {
+        'apikey': secret_key,
+        'Authorization': f'Bearer {secret_key}',
+        'Content-Type': 'application/json',
+    }
+
+
+def fetch_serp_results(supabase_url, secret_key, run_id):
+    """Return list of {id, url, title} dicts for all serp_results with this run_id."""
+    url = f"{supabase_url}/rest/v1/serp_results"
+    params = {'run_id': f'eq.{run_id}', 'select': 'id,url,title'}
+    resp = requests.get(url, headers=_supabase_headers(secret_key), params=params, timeout=30)
+    if not resp.ok:
+        print(f"ERROR: Supabase query failed: {resp.status_code} {resp.text}", file=sys.stderr)
+        sys.exit(1)
+    return resp.json()
+
+
+def deduplicate_by_url(rows):
+    """Group rows by URL. Returns {url: {title, serp_result_ids: [...]}}."""
+    grouped = {}
+    for row in rows:
+        url = row['url']
+        if url not in grouped:
+            grouped[url] = {'title': row.get('title') or '', 'serp_result_ids': []}
+        grouped[url]['serp_result_ids'].append(row['id'])
+    return grouped
+
+
 def run_summary(supabase_url, supabase_key, run_id):
     pass  # implemented in Task 4
 
