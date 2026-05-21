@@ -126,6 +126,26 @@ def deduplicate_by_url(rows):
     return grouped
 
 
+def fetch_firecrawl(api_key, url):
+    """Fetch URL via Firecrawl REST API. Returns markdown string or raises RuntimeError."""
+    headers = {
+        'Authorization': f'Bearer {api_key}',
+        'Content-Type': 'application/json',
+    }
+    resp = requests.post(
+        FIRECRAWL_URL,
+        headers=headers,
+        json={'url': url, 'formats': ['markdown']},
+        timeout=60,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"Firecrawl error {resp.status_code}: {resp.text}")
+    markdown = resp.json().get('data', {}).get('markdown', '')
+    if not markdown or len(markdown.strip()) < 100:
+        raise RuntimeError(f"Empty or too-short response from Firecrawl for {url}")
+    return markdown
+
+
 def run_summary(supabase_url, supabase_key, run_id):
     rows = fetch_serp_results(supabase_url, supabase_key, run_id)
     grouped = deduplicate_by_url(rows)

@@ -81,6 +81,47 @@ def test_run_summary_output(capsys):
     assert 'SUMMARY:run_id=run-uuid-123,total=3,unique=2,dupes=1' in captured.out
 
 
+from url_extract import fetch_firecrawl
+
+
+def test_fetch_firecrawl_returns_markdown():
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.json.return_value = {'data': {'markdown': 'Hello world content here and more text. ' * 5}}
+
+    with patch('url_extract.requests.post', return_value=mock_resp):
+        result = fetch_firecrawl('fake-key', 'https://example.com')
+
+    assert result == 'Hello world content here and more text. ' * 5
+
+
+def test_fetch_firecrawl_raises_on_http_error():
+    mock_resp = MagicMock()
+    mock_resp.ok = False
+    mock_resp.status_code = 403
+    mock_resp.text = 'Forbidden'
+
+    with patch('url_extract.requests.post', return_value=mock_resp):
+        try:
+            fetch_firecrawl('fake-key', 'https://example.com')
+            assert False, 'Should have raised'
+        except RuntimeError as e:
+            assert '403' in str(e)
+
+
+def test_fetch_firecrawl_raises_on_empty_response():
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.json.return_value = {'data': {'markdown': 'short'}}
+
+    with patch('url_extract.requests.post', return_value=mock_resp):
+        try:
+            fetch_firecrawl('fake-key', 'https://example.com')
+            assert False, 'Should have raised'
+        except RuntimeError as e:
+            assert 'short' in str(e).lower() or 'empty' in str(e).lower()
+
+
 def test_summary_only_flag_accepted():
     # With no env vars set, should error on SUPABASE_URL — not on unknown flag
     result = subprocess.run(
