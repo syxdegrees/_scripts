@@ -253,6 +253,69 @@ def test_save_voc_content_sets_parent_id():
     assert inserted_payloads[1]['parent_id'] == 'uuid-1'
 
 
+from url_extract import run_extract
+
+
+def test_run_extract_full_flow(capsys):
+    serp_rows = [
+        {'id': 'serp-1', 'url': 'https://example.com/post', 'title': 'Test Post'},
+        {'id': 'serp-2', 'url': 'https://example.com/post', 'title': 'Test Post'},  # duplicate
+    ]
+    voc_items = [
+        {'content_type': 'original_post', 'body': 'Full post text here', 'author': 'alice', 'position': 1, 'parent_position': None},
+        {'content_type': 'comment', 'body': 'A comment here', 'author': 'bob', 'position': 2, 'parent_position': 1},
+    ]
+
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = _make_anthropic_response(json.dumps(voc_items))
+
+    save_call_count = [0]
+
+    def mock_post(url, headers=None, json=None, timeout=None):
+        resp = MagicMock()
+        resp.ok = True
+        if JUNCTION_TABLE in url:
+            resp.json.return_value = []
+        elif VOC_TABLE in url and isinstance(json, dict):
+            idx = save_call_count[0]
+            resp.json.return_value = [{'id': f'voc-{idx}'}]
+            save_call_count[0] += 1
+        else:
+            resp.json.return_value = []
+        return resp
+
+    with patch('url_extract.fetch_serp_results', return_value=serp_rows), \
+         patch('url_extract.fetch_firecrawl', return_value='Some markdown content for extraction'), \
+         patch('url_extract.anthropic') as mock_anthropic_module, \
+         patch('url_extract.requests.post', side_effect=mock_post):
+
+        mock_anthropic_module.Anthropic.return_value = mock_client
+        run_extract('https://fake.supabase.co', 'fake-key', 'fc-key', 'ant-key', 'run-uuid')
+
+    captured = capsys.readouterr()
+    assert 'Extracting [1/1]' in captured.out
+    assert 'STATS:run_id=run-uuid' in captured.out
+    assert 'urls_processed=1' in captured.out
+    assert 'items_saved=2' in captured.out
+    assert 'failed=0' in captured.out
+
+
+def test_run_extract_handles_firecrawl_failure(capsys):
+    serp_rows = [{'id': 'serp-1', 'url': 'https://bad-url.com', 'title': 'Bad'}]
+
+    with patch('url_extract.fetch_serp_results', return_value=serp_rows), \
+         patch('url_extract.fetch_firecrawl', side_effect=RuntimeError('blocked')), \
+         patch('url_extract.anthropic') as mock_anthropic_module:
+
+        mock_anthropic_module.Anthropic.return_value = MagicMock()
+        run_extract('https://fake.supabase.co', 'fake-key', 'fc-key', 'ant-key', 'run-uuid')
+
+    captured = capsys.readouterr()
+    assert 'WARNING' in captured.err
+    assert 'failed=1' in captured.out
+    assert 'urls_processed=0' in captured.out
+
+
 def test_summary_only_flag_accepted():
     # With no env vars set, should error on SUPABASE_URL — not on unknown flag
     result = subprocess.run(

@@ -256,7 +256,61 @@ def run_summary(supabase_url, supabase_key, run_id):
 
 
 def run_extract(supabase_url, supabase_key, firecrawl_key, anthropic_key, run_id):
-    pass  # implemented in Task 8
+    client = anthropic.Anthropic(api_key=anthropic_key)
+
+    rows = fetch_serp_results(supabase_url, supabase_key, run_id)
+    grouped = deduplicate_by_url(rows)
+
+    total = len(grouped)
+    urls_processed = 0
+    items_saved = 0
+    failed = 0
+    truncated = 0
+
+    for i, (url, meta) in enumerate(grouped.items(), 1):
+        print(f"Extracting [{i}/{total}]: {url}")
+        title = meta['title']
+        serp_result_ids = meta['serp_result_ids']
+
+        try:
+            markdown = fetch_firecrawl(firecrawl_key, url)
+        except Exception as e:
+            print(f"WARNING: firecrawl failed for '{url}': {e}", file=sys.stderr)
+            failed += 1
+            continue
+
+        try:
+            voc_items, was_truncated = extract_voc(client, markdown, title)
+        except Exception as e:
+            print(f"WARNING: claude parse failed for '{url}': {e}", file=sys.stderr)
+            failed += 1
+            continue
+
+        if was_truncated:
+            print(f"WARNING: response truncated for '{url}' — saving partial results", file=sys.stderr)
+            truncated += 1
+
+        if not voc_items:
+            urls_processed += 1
+            continue
+
+        try:
+            count = save_voc_content(
+                supabase_url, supabase_key,
+                run_id, url, title, voc_items, serp_result_ids,
+            )
+            items_saved += count
+        except Exception as e:
+            print(f"WARNING: save failed for '{url}': {e}", file=sys.stderr)
+            failed += 1
+            continue
+
+        urls_processed += 1
+
+    print(
+        f"STATS:run_id={run_id},urls_processed={urls_processed},"
+        f"items_saved={items_saved},failed={failed},truncated={truncated}"
+    )
 
 
 if __name__ == '__main__':
