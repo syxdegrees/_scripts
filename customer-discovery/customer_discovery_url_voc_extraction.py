@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import anthropic
@@ -22,9 +23,30 @@ import requests
 
 FIRECRAWL_URL = "https://api.firecrawl.dev/v1/scrape"
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
-VOC_TABLE = "voc_content"
-JUNCTION_TABLE = "voc_content_serp_results"
+VOC_TABLE = "search_results"
+JUNCTION_TABLE = "search_results_serp_urls"
 MAX_LISTING_POSTS = 10
+ANTHROPIC_RPM = 50  # requests per minute limit
+
+
+class RateLimiter:
+    """Sliding-window rate limiter. Tracks recent call timestamps and sleeps when limit is reached."""
+
+    def __init__(self, max_per_minute):
+        self.max_per_minute = max_per_minute
+        self._calls = []
+
+    def wait(self):
+        now = time.time()
+        self._calls = [t for t in self._calls if now - t < 60]
+        if len(self._calls) >= self.max_per_minute:
+            sleep_for = 60 - (now - self._calls[0])
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+        self._calls.append(time.time())
+
+
+_rate_limiter = None
 
 CLASSIFY_SYSTEM = """Classify this web page as a listing or a post page.
 
@@ -124,7 +146,7 @@ def _supabase_headers(secret_key):
 
 def fetch_serp_results(supabase_url, secret_key, run_id):
     """Return list of {id, url, title} dicts for all serp_results with this run_id."""
-    url = f"{supabase_url}/rest/v1/serp_results"
+    url = f"{supabase_url}/rest/v1/serp_urls"
     params = {'run_id': f'eq.{run_id}', 'select': 'id,url,title'}
     resp = requests.get(url, headers=_supabase_headers(secret_key), params=params, timeout=30)
     if not resp.ok:
@@ -159,6 +181,8 @@ def classify_page(client, markdown, base_url):
     Returns (page_type: str, post_urls: list[str]).
     Falls back to ('post', []) on any parse error.
     """
+    if _rate_limiter:
+        _rate_limiter.wait()
     message = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=1024,
@@ -189,6 +213,8 @@ def extract_voc(client, markdown, title):
         f"Page title (hint for identifying the original post): {title}\n\n"
         f"Extract all user-generated content from this page:\n\n{markdown}"
     )
+    if _rate_limiter:
+        _rate_limiter.wait()
     message = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=8192,
@@ -335,6 +361,8 @@ def run_summary(supabase_url, supabase_key, run_id):
 
 
 def run_extract(supabase_url, supabase_key, firecrawl_key, anthropic_key, run_id):
+    global _rate_limiter
+    _rate_limiter = RateLimiter(ANTHROPIC_RPM)
     client = anthropic.Anthropic(api_key=anthropic_key)
 
     rows = fetch_serp_results(supabase_url, supabase_key, run_id)
