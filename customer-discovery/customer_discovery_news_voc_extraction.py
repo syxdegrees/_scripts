@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-customer_discovery_voc_news_extraction.py
+customer_discovery_news_voc_extraction.py
 Queries Google News Light + Bing News APIs for a run's discovery phrase,
-saves raw articles to news_results and normalized VoC to voc_content.
+saves raw article metadata to news_results, and queues article URLs in
+news_urls for scraping by the URL VOC extraction stage.
+Deduplicates against serp_urls to avoid double-scraping.
 
 Dependencies: pip install requests
-Usage: python customer_discovery_voc_news_extraction.py --run_id <uuid>
+Usage: python customer_discovery_news_voc_extraction.py --run_id <uuid>
 """
 
 import argparse
@@ -30,10 +32,14 @@ def load_env():
             break
 
 
+def _headers(secret_key):
+    return {'apikey': secret_key, 'Authorization': f'Bearer {secret_key}'}
+
+
 def get_discovery_phrase(supabase_url, secret_key, run_id):
     resp = requests.get(
         f"{supabase_url}/rest/v1/runs",
-        headers={'apikey': secret_key, 'Authorization': f'Bearer {secret_key}'},
+        headers=_headers(secret_key),
         params={'id': f'eq.{run_id}', 'select': 'discovery_phrase'},
         timeout=30,
     )
@@ -46,10 +52,22 @@ def get_discovery_phrase(supabase_url, secret_key, run_id):
     return rows[0]['discovery_phrase']
 
 
-def supabase_insert(supabase_url, secret_key, table, row, return_id=False):
+def fetch_existing_serp_urls(supabase_url, secret_key, run_id):
+    """Return set of URLs already queued in serp_urls for this run."""
+    resp = requests.get(
+        f"{supabase_url}/rest/v1/serp_urls",
+        headers=_headers(secret_key),
+        params={'run_id': f'eq.{run_id}', 'select': 'url'},
+        timeout=30,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"serp_urls query failed: {resp.status_code} {resp.text}")
+    return {row['url'] for row in resp.json()}
+
+
+def _default_insert(supabase_url, secret_key, table, row, return_id=False):
     headers = {
-        'apikey': secret_key,
-        'Authorization': f'Bearer {secret_key}',
+        **_headers(secret_key),
         'Content-Type': 'application/json',
         'Prefer': 'return=representation' if return_id else 'return=minimal',
     }
@@ -62,6 +80,53 @@ def supabase_insert(supabase_url, secret_key, table, row, return_id=False):
     if not resp.ok:
         raise RuntimeError(f"Insert {table} failed: {resp.status_code} {resp.text}")
     return resp.json()[0]['id'] if return_id else None
+
+
+def process_articles(supabase_url, secret_key, run_id, phrase, articles, engine,
+                     existing_serp_urls, insert_fn=None):
+    """Save each article to news_results and queue its URL in news_urls.
+
+    Skips news_urls insert if the URL already exists in serp_urls.
+    insert_fn is injectable for testing; defaults to _default_insert.
+    Returns (articles_saved, urls_queued, failed).
+    """
+    if insert_fn is None:
+        insert_fn = _default_insert
+
+    articles_saved = urls_queued = failed = 0
+
+    for article in articles:
+        try:
+            news_result_id = insert_fn(supabase_url, secret_key, 'news_results', {
+                'run_id': run_id,
+                'search_query': phrase,
+                'engine': engine,
+                'position': article.get('position'),
+                'title': article.get('title'),
+                'link': article.get('link'),
+                'snippet': article.get('snippet'),
+                'source': article.get('source'),
+                'pub_date': article.get('date'),
+                'thumbnail_url': article.get('thumbnail'),
+            }, return_id=True)
+            articles_saved += 1
+
+            article_url = article.get('link') or ''
+            if article_url and article_url not in existing_serp_urls:
+                insert_fn(supabase_url, secret_key, 'news_urls', {
+                    'run_id': run_id,
+                    'news_result_id': news_result_id,
+                    'url': article_url,
+                    'title': article.get('title'),
+                    'source': engine,
+                })
+                urls_queued += 1
+
+        except Exception as e:
+            print(f"WARNING: Article '{article.get('title', '')}' failed: {e}", file=sys.stderr)
+            failed += 1
+
+    return articles_saved, urls_queued, failed
 
 
 def fetch_google_news(phrase, api_key, page):
@@ -86,40 +151,6 @@ def fetch_bing_news(phrase, api_key, page):
     return resp.json().get('organic_results', [])
 
 
-def process_articles(supabase_url, secret_key, run_id, phrase, articles, engine):
-    saved = voc = failed = 0
-    for article in articles:
-        try:
-            news_result_id = supabase_insert(supabase_url, secret_key, 'news_results', {
-                'run_id': run_id,
-                'search_query': phrase,
-                'engine': engine,
-                'position': article.get('position'),
-                'title': article.get('title'),
-                'link': article.get('link'),
-                'snippet': article.get('snippet'),
-                'source': article.get('source'),
-                'pub_date': article.get('date'),
-                'thumbnail_url': article.get('thumbnail'),
-            }, return_id=True)
-            saved += 1
-
-            supabase_insert(supabase_url, secret_key, 'voc_content', {
-                'run_id': run_id,
-                'body': article.get('snippet') or '',
-                'content_type': 'article',
-                'source': 'news',
-                'source_url': article.get('link'),
-                'title': article.get('title'),
-                'news_result_id': news_result_id,
-            })
-            voc += 1
-        except Exception as e:
-            print(f"WARNING: Article '{article.get('title', '')}' failed: {e}", file=sys.stderr)
-            failed += 1
-    return saved, voc, failed
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--run_id', required=True)
@@ -138,14 +169,16 @@ def main():
 
     run_id = args.run_id
     phrase = get_discovery_phrase(supabase_url, secret_key, run_id)
+    existing_serp_urls = fetch_existing_serp_urls(supabase_url, secret_key, run_id)
 
-    total_articles = total_voc = total_failed = 0
+    total_articles = total_urls_saved = total_failed = 0
 
     for page in range(MAX_PAGES):
         try:
             articles = fetch_google_news(phrase, serpapi_key, page)
-            a, v, f = process_articles(supabase_url, secret_key, run_id, phrase, articles, 'google_news_light')
-            total_articles += a; total_voc += v; total_failed += f
+            a, u, f = process_articles(supabase_url, secret_key, run_id, phrase,
+                                       articles, 'google_news_light', existing_serp_urls)
+            total_articles += a; total_urls_saved += u; total_failed += f
         except Exception as e:
             print(f"WARNING: Google News page {page + 1} failed: {e}", file=sys.stderr)
             total_failed += 1
@@ -153,13 +186,14 @@ def main():
     for page in range(MAX_PAGES):
         try:
             articles = fetch_bing_news(phrase, serpapi_key, page)
-            a, v, f = process_articles(supabase_url, secret_key, run_id, phrase, articles, 'bing_news')
-            total_articles += a; total_voc += v; total_failed += f
+            a, u, f = process_articles(supabase_url, secret_key, run_id, phrase,
+                                       articles, 'bing_news', existing_serp_urls)
+            total_articles += a; total_urls_saved += u; total_failed += f
         except Exception as e:
             print(f"WARNING: Bing News page {page + 1} failed: {e}", file=sys.stderr)
             total_failed += 1
 
-    print(f"STATS:run_id={run_id},articles={total_articles},voc_saved={total_voc},failed={total_failed}")
+    print(f"STATS:run_id={run_id},articles={total_articles},urls_saved={total_urls_saved},failed={total_failed}")
 
 
 if __name__ == '__main__':
