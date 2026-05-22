@@ -285,6 +285,7 @@ def test_run_extract_full_flow(capsys):
         return resp
 
     with patch('customer_discovery_url_voc_extraction.fetch_serp_results', return_value=serp_rows), \
+         patch('customer_discovery_url_voc_extraction.fetch_news_urls', return_value=[]), \
          patch('customer_discovery_url_voc_extraction.fetch_firecrawl', return_value='Some markdown content for extraction'), \
          patch('customer_discovery_url_voc_extraction.anthropic') as mock_anthropic_module, \
          patch('customer_discovery_url_voc_extraction.requests.post', side_effect=mock_post):
@@ -304,6 +305,7 @@ def test_run_extract_handles_firecrawl_failure(capsys):
     serp_rows = [{'id': 'serp-1', 'url': 'https://bad-url.com', 'title': 'Bad'}]
 
     with patch('customer_discovery_url_voc_extraction.fetch_serp_results', return_value=serp_rows), \
+         patch('customer_discovery_url_voc_extraction.fetch_news_urls', return_value=[]), \
          patch('customer_discovery_url_voc_extraction.fetch_firecrawl', side_effect=RuntimeError('blocked')), \
          patch('customer_discovery_url_voc_extraction.anthropic') as mock_anthropic_module:
 
@@ -326,3 +328,63 @@ def test_summary_only_flag_accepted():
     # Should fail on missing SUPABASE_URL, not on unrecognized --summary-only
     assert 'SUPABASE_URL' in result.stderr or result.returncode != 0
     assert 'unrecognized' not in result.stderr
+
+
+from customer_discovery_url_voc_extraction import (
+    fetch_news_urls,
+    save_news_voc_content,
+)
+
+
+def test_fetch_news_urls_calls_correct_endpoint():
+    with patch('customer_discovery_url_voc_extraction.requests.get') as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.json.return_value = [
+            {'id': 'n1', 'url': 'https://news.com/1', 'title': 'Article 1'},
+        ]
+        mock_get.return_value = mock_resp
+
+        result = fetch_news_urls('http://supabase', 'key', 'run-1')
+
+    assert result == [{'id': 'n1', 'url': 'https://news.com/1', 'title': 'Article 1'}]
+    call_args = mock_get.call_args
+    assert 'news_urls' in call_args[0][0]
+    assert call_args[1]['params']['run_id'] == 'eq.run-1'
+    assert call_args[1]['params']['is_scraped'] == 'eq.false'
+
+
+def test_save_news_voc_content_inserts_with_parent_chain():
+    """Comments with parent_position must resolve to the correct parent_id."""
+    items = [
+        {'content_type': 'comment', 'body': 'Root comment', 'author': 'Alice',
+         'position': 1, 'parent_position': None},
+        {'content_type': 'comment', 'body': 'Reply to root', 'author': 'Bob',
+         'position': 2, 'parent_position': 1},
+    ]
+
+    inserted_rows = []
+    id_seq = ['id-1', 'id-2']
+
+    with patch('customer_discovery_url_voc_extraction.requests.post') as mock_post:
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+
+        def side_effect(*args, **kwargs):
+            row_id = id_seq.pop(0)
+            mock_resp.json.return_value = [{'id': row_id}]
+            inserted_rows.append(kwargs.get('json', {}))
+            return mock_resp
+
+        mock_post.side_effect = side_effect
+        count = save_news_voc_content(
+            'http://supabase', 'key', 'run-1',
+            'https://news.com/article', 'Article Title', 'news-url-id-1', items,
+        )
+
+    assert count == 2
+    assert inserted_rows[0]['parent_id'] is None
+    assert inserted_rows[0]['source'] == 'news_scrape'
+    assert inserted_rows[0]['news_url_id'] == 'news-url-id-1'
+    assert inserted_rows[1]['parent_id'] == 'id-1'
+    assert inserted_rows[1]['content_type'] == 'comment'

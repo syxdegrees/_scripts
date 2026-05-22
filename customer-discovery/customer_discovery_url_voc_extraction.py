@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import anthropic
@@ -27,6 +28,26 @@ VOC_TABLE = "search_results"
 JUNCTION_TABLE = "search_results_serp_urls"
 MAX_LISTING_POSTS = 10
 ANTHROPIC_RPM = 50  # requests per minute limit
+
+NEWS_EXTRACT_SYSTEM = """You extract user comments from news article web pages for Voice of Customer research.
+
+Return ONLY a JSON array. No markdown, no explanation, no wrapper object.
+
+Each item:
+{
+  "content_type": "comment",
+  "body": string,
+  "author": string | null,
+  "position": number,
+  "parent_position": number | null
+}
+
+Rules:
+- Only include user-written comments at the bottom of the article
+- Do NOT include the article body, headlines, journalist writing, or metadata
+- Replies to comments: parent_position = that comment's position
+- NEVER truncate body text — include the complete text of every comment
+- If no user comments exist, return []"""
 
 
 class RateLimiter:
@@ -235,6 +256,38 @@ def extract_voc(client, markdown, title):
     return items, truncated
 
 
+def extract_news_comments(client, markdown, title):
+    """Call Claude Haiku to extract user comments from a news article page.
+
+    Returns (items: list[dict], truncated: bool).
+    Raises RuntimeError on JSON parse failure.
+    """
+    user_msg = (
+        f"Article title: {title}\n\n"
+        f"Extract all user comments from this page:\n\n{markdown}"
+    )
+    if _rate_limiter:
+        _rate_limiter.wait()
+    message = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=8192,
+        system=NEWS_EXTRACT_SYSTEM,
+        messages=[{'role': 'user', 'content': user_msg}],
+    )
+    truncated = message.stop_reason == 'max_tokens'
+    block = next((b for b in message.content if b.type == 'text'), None)
+    text = block.text if block else '[]'
+
+    try:
+        items = json.loads(strip_fences(text))
+        if not isinstance(items, list):
+            raise ValueError("Response is not a JSON array")
+    except (json.JSONDecodeError, ValueError) as e:
+        raise RuntimeError(f"Failed to parse Claude response as JSON: {e}")
+
+    return items, truncated
+
+
 def fetch_firecrawl(api_key, url):
     """Fetch URL via Firecrawl REST API. Returns markdown string or raises RuntimeError."""
     headers = {
@@ -314,6 +367,82 @@ def save_voc_content(supabase_url, secret_key, run_id, url, title, items, serp_r
             )
 
     return items_saved
+
+
+def fetch_news_urls(supabase_url, secret_key, run_id):
+    """Return list of {id, url, title} dicts for all unscraped news_urls for this run."""
+    resp = requests.get(
+        f"{supabase_url}/rest/v1/news_urls",
+        headers=_supabase_headers(secret_key),
+        params={'run_id': f'eq.{run_id}', 'is_scraped': 'eq.false', 'select': 'id,url,title'},
+        timeout=30,
+    )
+    if not resp.ok:
+        print(f"ERROR: news_urls query failed: {resp.status_code} {resp.text}", file=sys.stderr)
+        sys.exit(1)
+    return resp.json()
+
+
+def save_news_voc_content(supabase_url, secret_key, run_id, url, title, news_url_id, items):
+    """Insert comment rows into voc_content for a scraped news article.
+
+    Inserts in position order so parent_id can be resolved from earlier rows.
+    Returns count of rows inserted.
+    """
+    headers_repr = {**_supabase_headers(secret_key), 'Prefer': 'return=representation'}
+    position_to_id = {}
+    items_saved = 0
+
+    for item in sorted(items, key=lambda x: x.get('position', 0)):
+        position = item.get('position')
+        parent_position = item.get('parent_position')
+        parent_id = position_to_id.get(parent_position) if parent_position else None
+
+        row = {
+            'run_id': run_id,
+            'body': item.get('body', ''),
+            'content_type': 'comment',
+            'source': 'news_scrape',
+            'source_url': url,
+            'title': title or None,
+            'author': item.get('author') or None,
+            'news_url_id': news_url_id,
+            'parent_id': parent_id,
+        }
+        resp = requests.post(
+            f"{supabase_url}/rest/v1/voc_content",
+            headers=headers_repr,
+            json=row,
+            timeout=30,
+        )
+        if not resp.ok:
+            raise RuntimeError(f"voc_content insert failed: {resp.status_code} {resp.text}")
+
+        inserted_id = resp.json()[0]['id']
+        position_to_id[position] = inserted_id
+        items_saved += 1
+
+    return items_saved
+
+
+def mark_news_url_scraped(supabase_url, secret_key, news_url_id):
+    """Set is_scraped=true and scraped_at=now on the news_urls row."""
+    resp = requests.patch(
+        f"{supabase_url}/rest/v1/news_urls",
+        headers=_supabase_headers(secret_key),
+        params={'id': f'eq.{news_url_id}'},
+        json={
+            'is_scraped': True,
+            'scraped_at': datetime.now(timezone.utc).isoformat(),
+        },
+        timeout=30,
+    )
+    if not resp.ok:
+        print(
+            f"WARNING: Failed to mark news_url {news_url_id} as scraped: "
+            f"{resp.status_code} {resp.text}",
+            file=sys.stderr,
+        )
 
 
 def process_url(client, firecrawl_key, supabase_url, supabase_key, run_id,
@@ -432,6 +561,51 @@ def run_extract(supabase_url, supabase_key, firecrawl_key, anthropic_key, run_id
             continue
 
         urls_processed += 1
+
+    # Process news_urls for this run
+    news_rows = fetch_news_urls(supabase_url, supabase_key, run_id)
+    news_total = len(news_rows)
+
+    for i, row in enumerate(news_rows, 1):
+        news_url_id = row['id']
+        url = row['url']
+        title = row.get('title')
+        print(f"Extracting news [{i}/{news_total}]: {url}")
+
+        try:
+            markdown = fetch_firecrawl(firecrawl_key, url)
+        except Exception as e:
+            print(f"WARNING: firecrawl failed for news url '{url}': {e}", file=sys.stderr)
+            failed += 1
+            continue
+
+        try:
+            news_items, was_truncated = extract_news_comments(client, markdown, title)
+        except Exception as e:
+            print(f"WARNING: claude parse failed for news url '{url}': {e}", file=sys.stderr)
+            failed += 1
+            continue
+
+        if was_truncated:
+            print(f"WARNING: response truncated for news url '{url}' — saving partial results",
+                  file=sys.stderr)
+            truncated += 1
+
+        mark_news_url_scraped(supabase_url, supabase_key, news_url_id)
+        urls_processed += 1
+
+        if not news_items:
+            continue
+
+        try:
+            count = save_news_voc_content(
+                supabase_url, supabase_key,
+                run_id, url, title, news_url_id, news_items,
+            )
+            items_saved += count
+        except Exception as e:
+            print(f"WARNING: save failed for news url '{url}': {e}", file=sys.stderr)
+            failed += 1
 
     print(
         f"STATS:run_id={run_id},urls_processed={urls_processed},"
