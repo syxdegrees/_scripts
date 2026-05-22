@@ -2,8 +2,9 @@
 ALTER TABLE public.voc_content
   DROP CONSTRAINT IF EXISTS voc_content_gplay_review_id_fkey;
 
--- Drop stale index from first migration
+-- Drop stale indexes from first migration (either naming variant)
 DROP INDEX IF EXISTS public.idx_voc_content_gplay_review_id;
+DROP INDEX IF EXISTS public.idx_voc_content_gplay_review;
 
 -- Drop old tables (empty, safe)
 DROP TABLE IF EXISTS public.gplay_reviews;
