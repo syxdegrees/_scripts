@@ -24,6 +24,24 @@ FIRECRAWL_URL = "https://api.firecrawl.dev/v1/scrape"
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 VOC_TABLE = "voc_content"
 JUNCTION_TABLE = "voc_content_serp_results"
+MAX_LISTING_POSTS = 10
+
+CLASSIFY_SYSTEM = """Classify this web page as a listing or a post page.
+
+Return ONLY a JSON object — no markdown, no explanation:
+{
+  "page_type": "listing" | "post",
+  "post_urls": ["https://...", ...]
+}
+
+Definitions:
+- "listing": a feed, index, or collection page showing previews or summaries of multiple posts or threads with links to each individual post
+- "post": a single thread, discussion, article, or review showing full content
+
+For "listing" pages: populate post_urls with up to 10 absolute URLs of individual posts or threads found on the page. Use the base URL to resolve any relative links.
+For "post" pages: post_urls should be an empty array.
+
+Only include URLs pointing to individual posts or discussions. Exclude pagination, category, tag, search, or profile links."""
 
 EXTRACT_SYSTEM = """You extract user-generated content from web pages for Voice of Customer research.
 
@@ -133,6 +151,32 @@ def strip_fences(text):
         text = text.split('\n', 1)[1] if '\n' in text else text[3:]
         text = text.rsplit('```', 1)[0].strip()
     return text
+
+
+def classify_page(client, markdown, base_url):
+    """Classify the page as listing or post. If listing, return up to MAX_LISTING_POSTS post URLs.
+
+    Returns (page_type: str, post_urls: list[str]).
+    Falls back to ('post', []) on any parse error.
+    """
+    message = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=1024,
+        system=CLASSIFY_SYSTEM,
+        messages=[{
+            'role': 'user',
+            'content': f"Base URL: {base_url}\n\nPage content:\n\n{markdown}",
+        }],
+    )
+    block = next((b for b in message.content if b.type == 'text'), None)
+    text = block.text if block else '{}'
+    try:
+        result = json.loads(strip_fences(text))
+        page_type = result.get('page_type', 'post')
+        post_urls = [u for u in result.get('post_urls', []) if isinstance(u, str)][:MAX_LISTING_POSTS]
+        return page_type, post_urls
+    except (json.JSONDecodeError, ValueError):
+        return 'post', []
 
 
 def extract_voc(client, markdown, title):
@@ -246,6 +290,41 @@ def save_voc_content(supabase_url, secret_key, run_id, url, title, items, serp_r
     return items_saved
 
 
+def process_url(client, firecrawl_key, supabase_url, supabase_key, run_id,
+                url, title, serp_result_ids, urls_processed, items_saved, failed, truncated):
+    """Scrape, extract, and save VOC for a single URL. Returns updated counters."""
+    try:
+        markdown = fetch_firecrawl(firecrawl_key, url)
+    except Exception as e:
+        print(f"WARNING: firecrawl failed for '{url}': {e}", file=sys.stderr)
+        return urls_processed, items_saved, failed + 1, truncated
+
+    try:
+        voc_items, was_truncated = extract_voc(client, markdown, title)
+    except Exception as e:
+        print(f"WARNING: claude parse failed for '{url}': {e}", file=sys.stderr)
+        return urls_processed, items_saved, failed + 1, truncated
+
+    if was_truncated:
+        print(f"WARNING: response truncated for '{url}' — saving partial results", file=sys.stderr)
+        truncated += 1
+
+    if not voc_items:
+        return urls_processed + 1, items_saved, failed, truncated
+
+    try:
+        count = save_voc_content(
+            supabase_url, supabase_key,
+            run_id, url, title, voc_items, serp_result_ids,
+        )
+        items_saved += count
+    except Exception as e:
+        print(f"WARNING: save failed for '{url}': {e}", file=sys.stderr)
+        return urls_processed, items_saved, failed + 1, truncated
+
+    return urls_processed + 1, items_saved, failed, truncated
+
+
 def run_summary(supabase_url, supabase_key, run_id):
     rows = fetch_serp_results(supabase_url, supabase_key, run_id)
     grouped = deduplicate_by_url(rows)
@@ -279,6 +358,25 @@ def run_extract(supabase_url, supabase_key, firecrawl_key, anthropic_key, run_id
             failed += 1
             continue
 
+        try:
+            page_type, post_urls = classify_page(client, markdown, url)
+        except Exception as e:
+            print(f"WARNING: classify failed for '{url}': {e}", file=sys.stderr)
+            page_type, post_urls = 'post', []
+
+        if page_type == 'listing' and post_urls:
+            print(f"  -> Listing page, following {len(post_urls)} posts")
+            urls_processed += 1
+            for post_url in post_urls:
+                print(f"    -> {post_url}")
+                urls_processed, items_saved, failed, truncated = process_url(
+                    client, firecrawl_key, supabase_url, supabase_key, run_id,
+                    post_url, None, serp_result_ids,
+                    urls_processed, items_saved, failed, truncated,
+                )
+            continue
+
+        # Standard post page — extract directly from the already-fetched markdown
         try:
             voc_items, was_truncated = extract_voc(client, markdown, title)
         except Exception as e:
