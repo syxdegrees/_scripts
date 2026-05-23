@@ -90,52 +90,6 @@ def load_env():
             return
 
 
-def load_mapping(path):
-    """Load field mapping JSON. Exits with ERROR if missing or malformed."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            mapping = json.load(f)
-    except FileNotFoundError:
-        print(f"ERROR: Mapping file not found: {path}")
-        sys.exit(1)
-    except json.JSONDecodeError as e:
-        print(f"ERROR: Mapping file is not valid JSON: {e}")
-        sys.exit(1)
-    if not isinstance(mapping, dict):
-        print(f"ERROR: Mapping file must be a JSON object (got {type(mapping).__name__})")
-        sys.exit(1)
-    return mapping
-
-
-def apply_mapping(row, mapping):
-    """Transform a row using the field mapping.
-
-    For each (api_field -> col_name) in mapping: if api_field is in row,
-    include it as col_name in the output.
-    Fields in row not in mapping are dropped with a WARNING (printed once per field).
-    run_id is always forwarded — mapped to its col_name if present in mapping,
-    otherwise kept as 'run_id'.
-    """
-    mapped = {}
-    warned = set()
-
-    for api_field, col_name in mapping.items():
-        if api_field in row:
-            mapped[col_name] = row[api_field]
-
-    for field in row:
-        if field == "run_id":
-            continue
-        if field not in mapping and field not in warned:
-            print(f"WARNING: Field '{field}' not in mapping — dropped")
-            warned.add(field)
-
-    if row.get("run_id") is not None:
-        run_id_col = mapping.get("run_id", "run_id")
-        mapped[run_id_col] = row["run_id"]
-
-    return mapped
-
 
 def serpapi_get(api_key, params):
     try:
@@ -416,8 +370,6 @@ def main():
                         help="Amazon domain (e.g. amazon.com, amazon.co.uk)")
     parser.add_argument("--pages", type=int, default=1,
                         help="Number of search result pages to fetch (default: 1)")
-    parser.add_argument("--mapping", required=True,
-                        help="Path to JSON mapping file (api_field -> column_name)")
     args = parser.parse_args()
 
     if args.country not in VALID_DOMAINS:
@@ -439,8 +391,6 @@ def main():
     if not serpapi_key:
         print("ERROR: SERPAPI_API_KEY is not set in environment or .env file.")
         sys.exit(1)
-
-    mapping = load_mapping(args.mapping)
 
     requested_sections = [s.strip() for s in args.sections.split(",") if s.strip()]
     unknown = [s for s in requested_sections
@@ -464,11 +414,10 @@ def main():
                 args.asin, product_data, requested_sections,
                 args.run_id, None
             )
-            mapped_row = apply_mapping(row, mapping)
             if has_supabase:
-                supabase_insert(args.supabase_url, args.supabase_key, args.table, mapped_row)
+                supabase_insert(args.supabase_url, args.supabase_key, args.table, row)
             if has_csv:
-                csv_rows.append(mapped_row)
+                csv_rows.append(row)
             rows_saved += 1
         except Exception as e:
             print(f"WARNING: Failed to fetch/save ASIN {args.asin}: {e}")
@@ -510,13 +459,12 @@ def main():
         )
         for row in search_rows:
             try:
-                mapped_row = apply_mapping(row, mapping)
                 if has_supabase:
                     supabase_insert(
-                        args.supabase_url, args.supabase_key, args.table, mapped_row
+                        args.supabase_url, args.supabase_key, args.table, row
                     )
                 if has_csv:
-                    csv_rows.append(mapped_row)
+                    csv_rows.append(row)
                 rows_saved += 1
             except Exception as e:
                 print(f"WARNING: Failed to save search row: {e}")
@@ -535,13 +483,12 @@ def main():
                         asin, product_data, requested_sections,
                         args.run_id, args.search_phrase
                     )
-                    mapped_row = apply_mapping(row, mapping)
                     if has_supabase:
                         supabase_insert(
-                            args.supabase_url, args.supabase_key, args.table, mapped_row
+                            args.supabase_url, args.supabase_key, args.table, row
                         )
                     if has_csv:
-                        csv_rows.append(mapped_row)
+                        csv_rows.append(row)
                     rows_saved += 1
                     time.sleep(0.3)
                 except Exception as e:
