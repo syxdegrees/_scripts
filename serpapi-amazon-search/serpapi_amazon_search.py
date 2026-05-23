@@ -84,6 +84,53 @@ def load_env():
             return
 
 
+def load_mapping(path):
+    """Load field mapping JSON. Exits with ERROR if missing or malformed."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            mapping = json.load(f)
+    except FileNotFoundError:
+        print(f"ERROR: Mapping file not found: {path}")
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Mapping file is not valid JSON: {e}")
+        sys.exit(1)
+    if not isinstance(mapping, dict):
+        print(f"ERROR: Mapping file must be a JSON object (got {type(mapping).__name__})")
+        sys.exit(1)
+    return mapping
+
+
+def apply_mapping(row, mapping):
+    """Transform a row using the field mapping.
+
+    For each (api_field -> col_name) in mapping: if api_field is in row,
+    include it as col_name in the output.
+    Fields in row not in mapping are dropped with a WARNING (printed once per field).
+    run_id is always forwarded — mapped to its col_name if present in mapping,
+    otherwise kept as 'run_id'.
+    """
+    mapped = {}
+    warned = set()
+
+    for api_field, col_name in mapping.items():
+        if api_field in row:
+            mapped[col_name] = row[api_field]
+
+    for field in row:
+        if field == "run_id":
+            continue
+        if field not in mapping and field not in warned:
+            print(f"WARNING: Field '{field}' not in mapping — dropped")
+            warned.add(field)
+
+    if row.get("run_id") is not None:
+        run_id_col = mapping.get("run_id", "run_id")
+        mapped[run_id_col] = row["run_id"]
+
+    return mapped
+
+
 def serpapi_get(api_key, params):
     try:
         import requests
@@ -115,12 +162,21 @@ def supabase_insert(supabase_url, secret_key, table, row):
     resp.raise_for_status()
 
 
-def search_amazon(api_key, phrase):
-    return serpapi_get(api_key, {"engine": "amazon", "k": phrase})
+def search_amazon(api_key, phrase, country="amazon.com", page=1):
+    return serpapi_get(api_key, {
+        "engine": "amazon",
+        "k": phrase,
+        "amazon_domain": country,
+        "page": page,
+    })
 
 
-def fetch_product(api_key, asin):
-    return serpapi_get(api_key, {"engine": "amazon_product", "asin": asin})
+def fetch_product(api_key, asin, country="amazon.com"):
+    return serpapi_get(api_key, {
+        "engine": "amazon_product",
+        "asin": asin,
+        "amazon_domain": country,
+    })
 
 
 def extract_asins_from_search(search_data):
@@ -236,6 +292,61 @@ def build_search_rows(phrase, search_data, requested_sections, run_id):
     return rows
 
 
+def export_voc_rows(supabase_url, supabase_key, voc_table, asin, product_title,
+                    run_id, reviews_information):
+    """Export VoC rows from reviews_information to the voc_content table.
+
+    Writes:
+      - One row for the overall AI summary text (if present)
+      - One row per insight example snippet (actual customer quote + sentiment)
+    Returns count of rows saved.
+    """
+    saved = 0
+    if not reviews_information:
+        return saved
+
+    summary = reviews_information.get("summary", {})
+
+    # Overall AI summary paragraph
+    summary_text = summary.get("text")
+    if summary_text:
+        try:
+            supabase_insert(supabase_url, supabase_key, voc_table, {
+                "run_id": run_id,
+                "body": summary_text,
+                "content_type": "review",
+                "source": "amazon",
+                "title": product_title,
+                "asin": asin,
+            })
+            saved += 1
+        except Exception as e:
+            print(f"WARNING: VoC summary insert failed for '{product_title}': {e}")
+
+    # Individual insight example snippets
+    for insight in summary.get("insights", []):
+        sentiment = insight.get("sentiment", "")
+        for example in insight.get("examples", []):
+            snippet = example.get("snippet", "").strip()
+            if not snippet:
+                continue
+            try:
+                supabase_insert(supabase_url, supabase_key, voc_table, {
+                    "run_id": run_id,
+                    "body": snippet,
+                    "content_type": "review",
+                    "source": "amazon",
+                    "title": product_title,
+                    "asin": asin,
+                    "sentiment": sentiment or None,
+                })
+                saved += 1
+            except Exception as e:
+                print(f"WARNING: VoC snippet insert failed for '{product_title}': {e}")
+
+    return saved
+
+
 def build_product_row(asin, product_data, requested_sections, run_id, search_phrase):
     merged_data = {}
 
@@ -280,6 +391,12 @@ def main():
                         help="Optional run UUID for linking results")
     parser.add_argument("--max_asins", type=int, default=10,
                         help="Max ASINs to fetch in two-stage mode (default: 10)")
+    parser.add_argument("--country", default="amazon.com",
+                        help="Amazon domain (e.g. amazon.com, amazon.co.uk)")
+    parser.add_argument("--pages", type=int, default=1,
+                        help="Number of search result pages to fetch (default: 1)")
+    parser.add_argument("--mapping", required=True,
+                        help="Path to JSON mapping file (api_field -> column_name)")
     args = parser.parse_args()
 
     load_env()
@@ -288,6 +405,8 @@ def main():
     if not serpapi_key:
         print("ERROR: SERPAPI_API_KEY is not set in environment or .env file.")
         sys.exit(1)
+
+    mapping = load_mapping(args.mapping)
 
     requested_sections = [s.strip() for s in args.sections.split(",") if s.strip()]
     unknown = [s for s in requested_sections
@@ -305,12 +424,13 @@ def main():
         phrase_label = f"ASIN:{args.asin}"
         print(f"Fetching product page for ASIN {args.asin}...")
         try:
-            product_data = fetch_product(serpapi_key, args.asin)
+            product_data = fetch_product(serpapi_key, args.asin, country=args.country)
             row = build_product_row(
                 args.asin, product_data, requested_sections,
                 args.run_id, None
             )
-            supabase_insert(args.supabase_url, args.supabase_key, args.table, row)
+            mapped_row = apply_mapping(row, mapping)
+            supabase_insert(args.supabase_url, args.supabase_key, args.table, mapped_row)
             rows_saved += 1
         except Exception as e:
             print(f"WARNING: Failed to fetch/save ASIN {args.asin}: {e}")
@@ -323,11 +443,26 @@ def main():
         # --- Search Term mode ---
         phrase_label = args.search_phrase
         print(f"Searching Amazon for: {phrase_label}")
-        try:
-            search_data = search_amazon(serpapi_key, args.search_phrase)
-        except Exception as e:
-            print(f"ERROR: Amazon search failed: {e}")
-            sys.exit(1)
+
+        all_search_data = {}
+        for page_num in range(1, args.pages + 1):
+            try:
+                page_data = search_amazon(serpapi_key, args.search_phrase,
+                                          country=args.country, page=page_num)
+            except Exception as e:
+                print(f"ERROR: Amazon search failed (page {page_num}): {e}")
+                sys.exit(1)
+            for section in SEARCH_SECTIONS:
+                if section in page_data:
+                    val = page_data[section]
+                    if isinstance(val, list):
+                        all_search_data.setdefault(section, []).extend(val)
+                    else:
+                        all_search_data[section] = val
+            if page_num == 1 and "search_information" in page_data:
+                all_search_data["search_information"] = page_data["search_information"]
+
+        search_data = all_search_data
 
         # Save search-level sections
         search_rows = build_search_rows(
@@ -335,8 +470,9 @@ def main():
         )
         for row in search_rows:
             try:
+                mapped_row = apply_mapping(row, mapping)
                 supabase_insert(
-                    args.supabase_url, args.supabase_key, args.table, row
+                    args.supabase_url, args.supabase_key, args.table, mapped_row
                 )
                 rows_saved += 1
             except Exception as e:
@@ -351,13 +487,14 @@ def main():
             print(f"Fetching product data for {len(asins)} ASINs...")
             for asin in asins:
                 try:
-                    product_data = fetch_product(serpapi_key, asin)
+                    product_data = fetch_product(serpapi_key, asin, country=args.country)
                     row = build_product_row(
                         asin, product_data, requested_sections,
                         args.run_id, args.search_phrase
                     )
+                    mapped_row = apply_mapping(row, mapping)
                     supabase_insert(
-                        args.supabase_url, args.supabase_key, args.table, row
+                        args.supabase_url, args.supabase_key, args.table, mapped_row
                     )
                     rows_saved += 1
                     time.sleep(0.3)
