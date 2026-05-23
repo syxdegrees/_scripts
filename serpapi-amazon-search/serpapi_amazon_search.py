@@ -380,6 +380,19 @@ def build_product_row(asin, product_data, requested_sections, run_id, search_phr
     }
 
 
+def write_csv(rows, path):
+    import csv
+    if not rows:
+        print("WARNING: No rows to write to CSV.")
+        return
+    fieldnames = list(dict.fromkeys(k for row in rows for k in row))
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"CSV written: {path} ({len(rows)} rows)")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Amazon SerpAPI extractor")
     group = parser.add_mutually_exclusive_group(required=True)
@@ -387,12 +400,14 @@ def main():
     group.add_argument("--asin", help="Amazon ASIN for direct product lookup")
     parser.add_argument("--sections", required=True,
                         help="Comma-separated section names to fetch")
-    parser.add_argument("--table", required=True,
+    parser.add_argument("--table", default=None,
                         help="Supabase table name to write results to")
-    parser.add_argument("--supabase_url", required=True,
+    parser.add_argument("--supabase_url", default=None,
                         help="Supabase project URL")
-    parser.add_argument("--supabase_key", required=True,
+    parser.add_argument("--supabase_key", default=None,
                         help="Supabase service role key")
+    parser.add_argument("--csv_output", default=None,
+                        help="Local CSV file path for testing (no Supabase required)")
     parser.add_argument("--run_id", default=None,
                         help="Optional run UUID for linking results")
     parser.add_argument("--max_asins", type=int, default=10,
@@ -407,6 +422,15 @@ def main():
 
     if args.country not in VALID_DOMAINS:
         print(f"ERROR: Invalid country '{args.country}'. Must be one of: {', '.join(sorted(VALID_DOMAINS))}")
+        sys.exit(1)
+
+    has_supabase = all([args.supabase_url, args.supabase_key, args.table])
+    has_csv = bool(args.csv_output)
+    if not has_supabase and not has_csv:
+        print("ERROR: Provide either --csv_output or all three Supabase args (--supabase_url, --supabase_key, --table).")
+        sys.exit(1)
+    if any([args.supabase_url, args.supabase_key, args.table]) and not has_supabase:
+        print("ERROR: --supabase_url, --supabase_key, and --table must all be provided together.")
         sys.exit(1)
 
     load_env()
@@ -428,6 +452,7 @@ def main():
     has_product_sections = any(s in PRODUCT_SECTIONS for s in requested_sections)
     rows_saved = 0
     failed = 0
+    csv_rows = []
 
     if args.asin:
         # --- ASIN mode ---
@@ -440,12 +465,17 @@ def main():
                 args.run_id, None
             )
             mapped_row = apply_mapping(row, mapping)
-            supabase_insert(args.supabase_url, args.supabase_key, args.table, mapped_row)
+            if has_supabase:
+                supabase_insert(args.supabase_url, args.supabase_key, args.table, mapped_row)
+            if has_csv:
+                csv_rows.append(mapped_row)
             rows_saved += 1
         except Exception as e:
             print(f"WARNING: Failed to fetch/save ASIN {args.asin}: {e}")
             failed += 1
 
+        if has_csv:
+            write_csv(csv_rows, args.csv_output)
         print(f"STATS:mode=asin,search_phrase={phrase_label},"
               f"products=1,rows_saved={rows_saved},failed={failed}")
 
@@ -481,9 +511,12 @@ def main():
         for row in search_rows:
             try:
                 mapped_row = apply_mapping(row, mapping)
-                supabase_insert(
-                    args.supabase_url, args.supabase_key, args.table, mapped_row
-                )
+                if has_supabase:
+                    supabase_insert(
+                        args.supabase_url, args.supabase_key, args.table, mapped_row
+                    )
+                if has_csv:
+                    csv_rows.append(mapped_row)
                 rows_saved += 1
             except Exception as e:
                 print(f"WARNING: Failed to save search row: {e}")
@@ -503,15 +536,20 @@ def main():
                         args.run_id, args.search_phrase
                     )
                     mapped_row = apply_mapping(row, mapping)
-                    supabase_insert(
-                        args.supabase_url, args.supabase_key, args.table, mapped_row
-                    )
+                    if has_supabase:
+                        supabase_insert(
+                            args.supabase_url, args.supabase_key, args.table, mapped_row
+                        )
+                    if has_csv:
+                        csv_rows.append(mapped_row)
                     rows_saved += 1
                     time.sleep(0.3)
                 except Exception as e:
                     print(f"WARNING: Failed to fetch/save ASIN {asin}: {e}")
                     failed += 1
 
+        if has_csv:
+            write_csv(csv_rows, args.csv_output)
         print(f"STATS:mode=search,search_phrase={phrase_label},"
               f"products={products},rows_saved={rows_saved},failed={failed}")
 
