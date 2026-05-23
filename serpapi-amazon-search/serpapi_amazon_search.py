@@ -481,22 +481,36 @@ def main():
                         help="Amazon domain (e.g. amazon.com, amazon.co.uk)")
     parser.add_argument("--pages", type=int, default=1,
                         help="Number of search result pages to fetch (default: 1)")
+    parser.add_argument("--mapping", default=None,
+                        help="Path to mapping JSON file (optional; enables mapping-driven Supabase writes)")
     args = parser.parse_args()
 
     if args.country not in VALID_DOMAINS:
         print(f"ERROR: Invalid country '{args.country}'. Must be one of: {', '.join(sorted(VALID_DOMAINS))}")
         sys.exit(1)
 
-    has_supabase = all([args.supabase_url, args.supabase_key, args.table])
     has_csv = bool(args.csv_output)
-    if not has_supabase and not has_csv:
-        print("ERROR: Provide either --csv_output or all three Supabase args (--supabase_url, --supabase_key, --table).")
-        sys.exit(1)
-    if any([args.supabase_url, args.supabase_key, args.table]) and not has_supabase:
-        print("ERROR: --supabase_url, --supabase_key, and --table must all be provided together.")
-        sys.exit(1)
+
+    if args.mapping:
+        # Mapping mode: table names come from mapping file; --table not needed
+        has_supabase = bool(args.supabase_url and args.supabase_key)
+        if not has_supabase and not has_csv:
+            print("ERROR: --mapping requires --supabase_url and --supabase_key, or --csv_output.")
+            sys.exit(1)
+    else:
+        # Legacy mode: --table required for Supabase writes
+        has_supabase = all([args.supabase_url, args.supabase_key, args.table])
+        if not has_supabase and not has_csv:
+            print("ERROR: Provide either --csv_output or all three Supabase args "
+                  "(--supabase_url, --supabase_key, --table).")
+            sys.exit(1)
+        if any([args.supabase_url, args.supabase_key, args.table]) and not has_supabase:
+            print("ERROR: --supabase_url, --supabase_key, and --table must all be provided together.")
+            sys.exit(1)
 
     load_env()
+
+    mapping = load_mapping(args.mapping) if args.mapping else None
 
     serpapi_key = os.environ.get("SERPAPI_API_KEY")
     if not serpapi_key:
@@ -521,15 +535,29 @@ def main():
         print(f"Fetching product page for ASIN {args.asin}...")
         try:
             product_data = fetch_product(serpapi_key, args.asin, country=args.country)
-            row = build_product_row(
-                args.asin, product_data, requested_sections,
-                args.run_id, None
-            )
-            if has_supabase:
-                supabase_insert(args.supabase_url, args.supabase_key, args.table, row)
-            if has_csv:
-                csv_rows.append(row)
-            rows_saved += 1
+
+            if mapping:
+                for table_mapping in mapping:
+                    row = build_mapped_product_row(product_data, table_mapping)
+                    if args.run_id:
+                        row["run_id"] = args.run_id
+                    if has_supabase:
+                        supabase_insert(args.supabase_url, args.supabase_key,
+                                        table_mapping["table"], row)
+                    if has_csv:
+                        csv_rows.append(row)
+                rows_saved += 1
+            else:
+                row = build_product_row(
+                    args.asin, product_data, requested_sections,
+                    args.run_id, None
+                )
+                if has_supabase:
+                    supabase_insert(args.supabase_url, args.supabase_key, args.table, row)
+                if has_csv:
+                    csv_rows.append(row)
+                rows_saved += 1
+
         except Exception as e:
             print(f"WARNING: Failed to fetch/save ASIN {args.asin}: {e}")
             failed += 1
@@ -564,36 +592,67 @@ def main():
 
         search_data = all_search_data
 
-        # Save search-level sections
-        search_rows = build_search_rows(
-            args.search_phrase, search_data, requested_sections, args.run_id
-        )
-        for row in search_rows:
-            try:
-                if has_supabase:
-                    supabase_insert(
-                        args.supabase_url, args.supabase_key, args.table, row
-                    )
-                if has_csv:
-                    csv_rows.append(row)
-                rows_saved += 1
-            except Exception as e:
-                print(f"WARNING: Failed to save search row: {e}")
-                failed += 1
-
         products = len(search_data.get("organic_results", []))
 
-        # Auto two-stage: fetch product data for each ASIN
-        if has_product_sections:
-            asins = extract_asins_from_search(search_data)[:args.max_asins]
-            print(f"Fetching product data for {len(asins)} ASINs...")
-            for asin in asins:
+        if mapping:
+            # ── Mapping-driven path ──────────────────────────────────────────
+            if has_product_sections:
+                # Branch B1: two-phase — one merged row per ASIN
+                asins = extract_asins_from_search(search_data)[:args.max_asins]
+                search_items_by_asin = {
+                    item.get("asin"): item
+                    for item in search_data.get("organic_results", [])
+                    if item.get("asin")
+                }
+                print(f"Fetching product data for {len(asins)} ASINs...")
+                for asin in asins:
+                    try:
+                        product_data = fetch_product(serpapi_key, asin, country=args.country)
+                        search_item = search_items_by_asin.get(asin, {})
+                        for table_mapping in mapping:
+                            row = build_row_from_mapping(search_item, product_data, table_mapping)
+                            if args.run_id:
+                                row["run_id"] = args.run_id
+                            if args.search_phrase:
+                                row["search_phrase"] = args.search_phrase
+                            if has_supabase:
+                                supabase_insert(args.supabase_url, args.supabase_key,
+                                                table_mapping["table"], row)
+                            if has_csv:
+                                csv_rows.append(row)
+                        rows_saved += 1
+                        time.sleep(0.3)
+                    except Exception as e:
+                        print(f"WARNING: Failed for ASIN {asin}: {e}")
+                        failed += 1
+            else:
+                # Branch A: search data only — one row per organic_result item
+                items = search_data.get("organic_results", [])
+                for item in items:
+                    try:
+                        for table_mapping in mapping:
+                            row = build_mapped_search_row(item, table_mapping)
+                            if args.run_id:
+                                row["run_id"] = args.run_id
+                            if args.search_phrase:
+                                row["search_phrase"] = args.search_phrase
+                            if has_supabase:
+                                supabase_insert(args.supabase_url, args.supabase_key,
+                                                table_mapping["table"], row)
+                            if has_csv:
+                                csv_rows.append(row)
+                        rows_saved += 1
+                    except Exception as e:
+                        print(f"WARNING: Failed to save search row: {e}")
+                        failed += 1
+
+        else:
+            # ── Legacy path (no mapping) ─────────────────────────────────────
+            search_rows = build_search_rows(
+                args.search_phrase, search_data, requested_sections, args.run_id
+            )
+            for row in search_rows:
                 try:
-                    product_data = fetch_product(serpapi_key, asin, country=args.country)
-                    row = build_product_row(
-                        asin, product_data, requested_sections,
-                        args.run_id, args.search_phrase
-                    )
                     if has_supabase:
                         supabase_insert(
                             args.supabase_url, args.supabase_key, args.table, row
@@ -601,10 +660,31 @@ def main():
                     if has_csv:
                         csv_rows.append(row)
                     rows_saved += 1
-                    time.sleep(0.3)
                 except Exception as e:
-                    print(f"WARNING: Failed to fetch/save ASIN {asin}: {e}")
+                    print(f"WARNING: Failed to save search row: {e}")
                     failed += 1
+
+            if has_product_sections:
+                asins = extract_asins_from_search(search_data)[:args.max_asins]
+                print(f"Fetching product data for {len(asins)} ASINs...")
+                for asin in asins:
+                    try:
+                        product_data = fetch_product(serpapi_key, asin, country=args.country)
+                        row = build_product_row(
+                            asin, product_data, requested_sections,
+                            args.run_id, args.search_phrase
+                        )
+                        if has_supabase:
+                            supabase_insert(
+                                args.supabase_url, args.supabase_key, args.table, row
+                            )
+                        if has_csv:
+                            csv_rows.append(row)
+                        rows_saved += 1
+                        time.sleep(0.3)
+                    except Exception as e:
+                        print(f"WARNING: Failed to fetch/save ASIN {asin}: {e}")
+                        failed += 1
 
         if has_csv:
             write_csv(csv_rows, args.csv_output)
