@@ -66,6 +66,12 @@ PRODUCT_SECTION_KEY_MAP = {
     "product_videos": "videos",
 }
 
+VALID_DOMAINS = {
+    "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.de",
+    "amazon.fr", "amazon.es", "amazon.it", "amazon.co.jp",
+    "amazon.in", "amazon.com.au", "amazon.com.mx",
+}
+
 
 def load_env():
     candidates = [
@@ -398,6 +404,10 @@ def main():
     parser.add_argument("--mapping", required=True,
                         help="Path to JSON mapping file (api_field -> column_name)")
     args = parser.parse_args()
+
+    if args.country not in VALID_DOMAINS:
+        print(f"ERROR: Invalid country '{args.country}'. Must be one of: {', '.join(sorted(VALID_DOMAINS))}")
+        sys.exit(1)
 
     load_env()
 
