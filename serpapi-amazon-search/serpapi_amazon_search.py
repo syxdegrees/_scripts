@@ -450,12 +450,34 @@ def write_csv(rows, path):
     if not rows:
         print("WARNING: No rows to write to CSV.")
         return
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     fieldnames = list(dict.fromkeys(k for row in rows for k in row))
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
     print(f"CSV written: {path} ({len(rows)} rows)")
+
+
+def write_csv_by_table(csv_rows_by_table, output_folder, phrase_label):
+    """Write one dated CSV per table entry when --csv_output is a folder (multiple destinations)."""
+    import csv
+    import re
+    from datetime import date
+    folder = Path(output_folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    today = date.today().strftime("%Y-%m-%d")
+    safe_label = re.sub(r"[^a-z0-9-]", "", re.sub(r"\s+", "-", phrase_label.lower())).strip("-")
+    for table_name, rows in csv_rows_by_table.items():
+        if not rows:
+            continue
+        file_path = folder / f"{today}_{safe_label}_{table_name}.csv"
+        fieldnames = list(dict.fromkeys(k for row in rows for k in row))
+        with open(file_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"CSV written: {file_path} ({len(rows)} rows)")
 
 
 def main():
@@ -528,6 +550,10 @@ def main():
     rows_saved = 0
     failed = 0
     csv_rows = []
+    # Multi-table CSV mode: mapping has more than 1 table entry.
+    # csv_output is treated as a folder; one file is written per table.
+    csv_output_is_dir = bool(args.csv_output and mapping and len(mapping) > 1)
+    csv_rows_by_table: dict = {}
 
     if args.asin:
         # --- ASIN mode ---
@@ -545,7 +571,10 @@ def main():
                         supabase_insert(args.supabase_url, args.supabase_key,
                                         table_mapping["table"], row)
                     if has_csv:
-                        csv_rows.append(row)
+                        if csv_output_is_dir:
+                            csv_rows_by_table.setdefault(table_mapping["table"], []).append(row)
+                        else:
+                            csv_rows.append(row)
                 rows_saved += 1
             else:
                 row = build_product_row(
@@ -563,7 +592,10 @@ def main():
             failed += 1
 
         if has_csv:
-            write_csv(csv_rows, args.csv_output)
+            if csv_output_is_dir:
+                write_csv_by_table(csv_rows_by_table, args.csv_output, phrase_label)
+            else:
+                write_csv(csv_rows, args.csv_output)
         print(f"STATS:mode=asin,search_phrase={phrase_label},"
               f"products=1,rows_saved={rows_saved},failed={failed}")
 
@@ -619,7 +651,10 @@ def main():
                                 supabase_insert(args.supabase_url, args.supabase_key,
                                                 table_mapping["table"], row)
                             if has_csv:
-                                csv_rows.append(row)
+                                if csv_output_is_dir:
+                                    csv_rows_by_table.setdefault(table_mapping["table"], []).append(row)
+                                else:
+                                    csv_rows.append(row)
                         rows_saved += 1
                         time.sleep(0.3)
                     except Exception as e:
@@ -640,7 +675,10 @@ def main():
                                 supabase_insert(args.supabase_url, args.supabase_key,
                                                 table_mapping["table"], row)
                             if has_csv:
-                                csv_rows.append(row)
+                                if csv_output_is_dir:
+                                    csv_rows_by_table.setdefault(table_mapping["table"], []).append(row)
+                                else:
+                                    csv_rows.append(row)
                         rows_saved += 1
                     except Exception as e:
                         print(f"WARNING: Failed to save search row: {e}")
@@ -687,7 +725,10 @@ def main():
                         failed += 1
 
         if has_csv:
-            write_csv(csv_rows, args.csv_output)
+            if csv_output_is_dir:
+                write_csv_by_table(csv_rows_by_table, args.csv_output, phrase_label)
+            else:
+                write_csv(csv_rows, args.csv_output)
         print(f"STATS:mode=search,search_phrase={phrase_label},"
               f"products={products},rows_saved={rows_saved},failed={failed}")
 
