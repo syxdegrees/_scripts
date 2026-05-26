@@ -498,18 +498,19 @@ def main():
             product_data = fetch_product(serpapi_key, args.asin, country=args.country)
 
             for table_mapping in mapping:
-                row = build_mapped_product_row(product_data, table_mapping)
-                if args.run_id:
-                    row["run_id"] = args.run_id
-                if has_supabase:
-                    supabase_insert(args.supabase_url, args.supabase_key,
-                                    table_mapping["table"], row)
-                if has_csv:
-                    if csv_output_is_dir:
-                        csv_rows_by_table.setdefault(table_mapping["table"], []).append(row)
-                    else:
-                        csv_rows.append(row)
-            rows_saved += 1
+                new_rows = build_rows_from_mapping({}, product_data, table_mapping)
+                for r in new_rows:
+                    if args.run_id:
+                        r["run_id"] = args.run_id
+                    if has_supabase:
+                        supabase_insert(args.supabase_url, args.supabase_key,
+                                        table_mapping["table"], r)
+                    if has_csv:
+                        if csv_output_is_dir:
+                            csv_rows_by_table.setdefault(table_mapping["table"], []).append(r)
+                        else:
+                            csv_rows.append(r)
+                rows_saved += len(new_rows)
 
         except Exception as e:
             print(f"WARNING: Failed to fetch/save ASIN {args.asin}: {e}")
@@ -564,20 +565,21 @@ def main():
                     product_data = fetch_product(serpapi_key, asin, country=args.country)
                     search_item = search_items_by_asin.get(asin, {})
                     for table_mapping in mapping:
-                        row = build_row_from_mapping(search_item, product_data, table_mapping)
-                        if args.run_id:
-                            row["run_id"] = args.run_id
-                        if args.search_phrase:
-                            row["search_phrase"] = args.search_phrase
-                        if has_supabase:
-                            supabase_insert(args.supabase_url, args.supabase_key,
-                                            table_mapping["table"], row)
-                        if has_csv:
-                            if csv_output_is_dir:
-                                csv_rows_by_table.setdefault(table_mapping["table"], []).append(row)
-                            else:
-                                csv_rows.append(row)
-                    rows_saved += 1
+                        new_rows = build_rows_from_mapping(search_item, product_data, table_mapping)
+                        for r in new_rows:
+                            if args.run_id:
+                                r["run_id"] = args.run_id
+                            if args.search_phrase:
+                                r["search_phrase"] = args.search_phrase
+                            if has_supabase:
+                                supabase_insert(args.supabase_url, args.supabase_key,
+                                                table_mapping["table"], r)
+                            if has_csv:
+                                if csv_output_is_dir:
+                                    csv_rows_by_table.setdefault(table_mapping["table"], []).append(r)
+                                else:
+                                    csv_rows.append(r)
+                        rows_saved += len(new_rows)
                     time.sleep(0.3)
                 except Exception as e:
                     print(f"WARNING: Failed for ASIN {asin}: {e}")
@@ -588,20 +590,21 @@ def main():
             for item in items:
                 try:
                     for table_mapping in mapping:
-                        row = build_mapped_search_row(item, table_mapping)
-                        if args.run_id:
-                            row["run_id"] = args.run_id
-                        if args.search_phrase:
-                            row["search_phrase"] = args.search_phrase
-                        if has_supabase:
-                            supabase_insert(args.supabase_url, args.supabase_key,
-                                            table_mapping["table"], row)
-                        if has_csv:
-                            if csv_output_is_dir:
-                                csv_rows_by_table.setdefault(table_mapping["table"], []).append(row)
-                            else:
-                                csv_rows.append(row)
-                    rows_saved += 1
+                        new_rows = build_rows_from_mapping(item, {}, table_mapping)
+                        for r in new_rows:
+                            if args.run_id:
+                                r["run_id"] = args.run_id
+                            if args.search_phrase:
+                                r["search_phrase"] = args.search_phrase
+                            if has_supabase:
+                                supabase_insert(args.supabase_url, args.supabase_key,
+                                                table_mapping["table"], r)
+                            if has_csv:
+                                if csv_output_is_dir:
+                                    csv_rows_by_table.setdefault(table_mapping["table"], []).append(r)
+                                else:
+                                    csv_rows.append(r)
+                        rows_saved += len(new_rows)
                 except Exception as e:
                     print(f"WARNING: Failed to save search row: {e}")
                     failed += 1
