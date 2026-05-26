@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Full API test: dumps raw SerpAPI search + product responses to dated CSVs.
+Full API test: dumps raw SerpAPI Amazon search + product responses to dated CSVs.
 No mapping, no Supabase, no field filtering.
 
 Output:
@@ -16,6 +16,8 @@ import re
 import sys
 from datetime import date
 from pathlib import Path
+
+sys.stdout.reconfigure(encoding="utf-8")
 
 SERPAPI_URL = "https://serpapi.com/search"
 TESTS_DIR = Path(__file__).parent / "tests"
@@ -92,11 +94,93 @@ def write_csv(rows: list, path: Path) -> None:
     print(f"Written: {path} ({len(rows)} rows)")
 
 
+METADATA_KEYS = {
+    "search_metadata", "search_parameters", "search_information",
+    "serpapi_pagination", "pagination", "error",
+}
+
+
+def collect_section_keys(response: dict) -> dict:
+    """Returns {section: set_of_sub_keys} for all non-metadata sections."""
+    result = {}
+    for section, value in response.items():
+        if section in METADATA_KEYS:
+            continue
+        if isinstance(value, list) and value:
+            first = value[0]
+            result[section] = set(first.keys()) if isinstance(first, dict) else set()
+        elif isinstance(value, dict):
+            result[section] = set(value.keys())
+        else:
+            result[section] = set()
+    return result
+
+
+def check_against_reference(search_response: dict, product_response: dict, reference_path: str) -> None:
+    ref_path = Path(reference_path)
+    if not ref_path.exists():
+        print(f"ERROR: Reference file not found: {reference_path}")
+        sys.exit(1)
+    ref = ref_path.read_text(encoding="utf-8")
+
+    search_keys = collect_section_keys(search_response)
+    product_keys = collect_section_keys(product_response)
+
+    any_issues = False
+
+    print("\nRefresh API Reference Check")
+    print("=" * 60)
+
+    for api_label, sections in [
+        ("Search API  (engine=amazon)", search_keys),
+        ("Product API (engine=amazon_product)", product_keys),
+    ]:
+        print(f"\n{api_label}")
+        print("-" * 50)
+        missing_sections = []
+        partial_sections = []
+        ok_sections = []
+
+        for section in sorted(sections):
+            subkeys = sections[section]
+            if f"`{section}`" not in ref:
+                missing_sections.append(section)
+                any_issues = True
+                continue
+            missing_sub = sorted(k for k in subkeys if f"`{k}`" not in ref)
+            if missing_sub:
+                partial_sections.append((section, missing_sub))
+                any_issues = True
+            else:
+                ok_sections.append(section)
+
+        for s in ok_sections:
+            print(f"  OK       {s}")
+        for s in missing_sections:
+            print(f"  MISSING  {s}  ← entire section not documented")
+        for s, keys in partial_sections:
+            print(f"  PARTIAL  {s}")
+            for k in keys:
+                print(f"             missing key: `{k}`")
+
+    print("\n" + "=" * 60)
+    if any_issues:
+        print("Action: update serpapi-amazon-api-reference.md to add the entries above.")
+    else:
+        print("Reference is up to date — no missing sections or keys found.")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Full API test — dumps raw SerpAPI response to dated CSVs"
+        description="Full API test — dumps raw SerpAPI Amazon response to dated CSVs, or checks field coverage against a reference file"
     )
     parser.add_argument("--search_phrase", required=True, help="Search term to test with")
+    parser.add_argument(
+        "--refresh_reference",
+        metavar="PATH",
+        help="Path to serpapi-amazon-api-reference.md. When set, checks live API keys against the reference instead of writing CSVs.",
+    )
     args = parser.parse_args()
 
     load_env()
@@ -108,35 +192,45 @@ def main():
     clean_term = clean_search_term(args.search_phrase)
 
     # Search API
-    print(f"Calling search API: {args.search_phrase}")
+    print(f"Calling Amazon search API: {args.search_phrase}")
     search_response = serpapi_get(api_key, {
         "engine": "amazon",
         "k": args.search_phrase,
         "amazon_domain": "amazon.com",
         "page": 1,
     })
-    search_rows = flatten_response(search_response)
-    search_filename = build_filename("search", clean_term)
-    search_path = TESTS_DIR / search_filename
-    write_csv(search_rows, search_path)
 
     # Extract first ASIN
     organic = search_response.get("organic_results", [])
     if not organic:
         print("WARNING: No organic_results — skipping product API call.")
+        if args.refresh_reference:
+            check_against_reference(search_response, {}, args.refresh_reference)
         return
     asin = organic[0].get("asin")
     if not asin:
-        print("WARNING: First organic result has no ASIN — skipping product API call.")
+        print("WARNING: First organic result has no asin — skipping product API call.")
+        if args.refresh_reference:
+            check_against_reference(search_response, {}, args.refresh_reference)
         return
 
     # Product API
-    print(f"Calling product API: {asin}")
+    print(f"Calling Amazon product API: {asin}")
     product_response = serpapi_get(api_key, {
         "engine": "amazon_product",
         "asin": asin,
         "amazon_domain": "amazon.com",
     })
+
+    if args.refresh_reference:
+        check_against_reference(search_response, product_response, args.refresh_reference)
+        return
+
+    search_rows = flatten_response(search_response)
+    search_filename = build_filename("search", clean_term)
+    search_path = TESTS_DIR / search_filename
+    write_csv(search_rows, search_path)
+
     product_rows = flatten_response(product_response, extra_cols={"asin": asin})
     product_filename = build_filename("product", asin)
     product_path = TESTS_DIR / product_filename
@@ -145,10 +239,10 @@ def main():
     print(f"""
 Full API Test complete.
 ────────────────────────────────────────
-  Search term : {args.search_phrase}
-  ASIN tested : {asin}
-  Search rows : {len(search_rows)}  →  {search_path}
-  Product rows: {len(product_rows)}  →  {product_path}
+  Search term   : {args.search_phrase}
+  ASIN tested   : {asin}
+  Search rows   : {len(search_rows)}  →  {search_path}
+  Product rows  : {len(product_rows)}  →  {product_path}
 ────────────────────────────────────────
 Review the CSV files to explore the full API surface.
 """)
