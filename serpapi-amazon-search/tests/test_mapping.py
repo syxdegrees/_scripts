@@ -113,6 +113,42 @@ def test_load_mapping_invalid_json_exits(tmp_path):
     with pytest.raises(SystemExit):
         load_mapping(str(f))
 
+def test_load_mapping_null_row_source_is_valid(tmp_path):
+    mapping = [{"table": "t", "row_source": None, "fields": [
+        {"source_section": "s", "source_field": "f", "dest_column": "c"}
+    ]}]
+    f = tmp_path / "m.json"
+    f.write_text(json.dumps(mapping))
+    result = load_mapping(str(f))
+    assert result[0]["row_source"] is None
+
+def test_load_mapping_valid_dot_path_row_source(tmp_path):
+    mapping = [{"table": "t", "row_source": "reviews_information.authors_reviews", "fields": [
+        {"source_section": "s", "source_field": "f", "dest_column": "c"}
+    ]}]
+    f = tmp_path / "m.json"
+    f.write_text(json.dumps(mapping))
+    result = load_mapping(str(f))
+    assert result[0]["row_source"] == "reviews_information.authors_reviews"
+
+def test_load_mapping_row_source_no_dot_exits(tmp_path):
+    mapping = [{"table": "t", "row_source": "organic_results", "fields": [
+        {"source_section": "s", "source_field": "f", "dest_column": "c"}
+    ]}]
+    f = tmp_path / "m.json"
+    f.write_text(json.dumps(mapping))
+    with pytest.raises(SystemExit):
+        load_mapping(str(f))
+
+def test_load_mapping_row_source_empty_string_exits(tmp_path):
+    mapping = [{"table": "t", "row_source": "", "fields": [
+        {"source_section": "s", "source_field": "f", "dest_column": "c"}
+    ]}]
+    f = tmp_path / "m.json"
+    f.write_text(json.dumps(mapping))
+    with pytest.raises(SystemExit):
+        load_mapping(str(f))
+
 
 # ── build_mapped_search_row ──────────────────────────────────────────────────
 

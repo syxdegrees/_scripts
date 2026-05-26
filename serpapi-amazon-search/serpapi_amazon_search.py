@@ -183,6 +183,17 @@ def load_mapping(path):
                       f"(must be 'search' or 'product')")
                 sys.exit(1)
 
+        row_source = entry.get("row_source")
+        if row_source is not None:
+            if not isinstance(row_source, str) or not row_source:
+                print(f"ERROR: Mapping entry {i} has invalid row_source "
+                      f"(must be a non-empty dot-path string or null)")
+                sys.exit(1)
+            if "." not in row_source:
+                print(f"ERROR: Mapping entry {i} row_source '{row_source}' must include "
+                      f"a section prefix (e.g. 'reviews_information.authors_reviews')")
+                sys.exit(1)
+
     return data
 
 
