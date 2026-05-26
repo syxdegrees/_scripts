@@ -200,6 +200,131 @@ def extract_field(obj, field_path):
     return current
 
 
+def _navigate(current, remaining, path_parts, ancestor_ctx, results):
+    if not remaining:
+        if isinstance(current, list):
+            for item in current:
+                results.append((item, dict(ancestor_ctx)))
+        elif current is not None:
+            results.append((current, dict(ancestor_ctx)))
+        return
+
+    if isinstance(current, list):
+        for item in current:
+            _navigate(item, remaining, path_parts, ancestor_ctx, results)
+        return
+
+    if not isinstance(current, dict):
+        return
+
+    next_part = remaining[0]
+    rest = remaining[1:]
+    value = current.get(next_part)
+    if value is None:
+        return
+
+    new_path = path_parts + [next_part]
+
+    if isinstance(value, list):
+        new_ctx = dict(ancestor_ctx)
+        for k, v in current.items():
+            if k != next_part and not isinstance(v, (list, dict)):
+                new_ctx[".".join(path_parts + [k])] = v
+        if rest:
+            for item in value:
+                _navigate(item, rest, new_path, new_ctx, results)
+        else:
+            for item in value:
+                results.append((item, dict(new_ctx)))
+    else:
+        _navigate(value, rest, new_path, ancestor_ctx, results)
+
+
+def navigate_path(obj, path):
+    """
+    Traverse a dot-path through nested dicts/lists.
+    Returns list of (leaf_item, ancestor_ctx) tuples.
+    ancestor_ctx maps section-root-relative path strings to scalar values
+    captured at each list boundary during traversal.
+    """
+    if not path or obj is None:
+        return []
+    parts = path.split(".")
+    results = []
+    _navigate(obj, parts, [], {}, results)
+    return results
+
+
+def build_rows_from_mapping(search_item, product_response, table_mapping):
+    """
+    Build a list of rows from a table mapping.
+
+    row_source=None  → scalar mode: one row per call, direct field extraction.
+    row_source="section.inner.path" → list mode: one row per leaf item in that list.
+      - phase="search" fields: extracted from search_item (duplicated across all rows).
+      - Leaf fields: source_field starts with inner_path+"." — extracted from each leaf item.
+      - Ancestor fields: source_field found in ancestor_ctx captured during list traversal.
+      - Other sections: extracted from product_response directly.
+    """
+    row_source = table_mapping.get("row_source")
+
+    if row_source is None:
+        row = {}
+        for field in table_mapping["fields"]:
+            phase = field.get("phase")
+            dest_col = field["dest_column"]
+            if phase == "search":
+                row[dest_col] = extract_field(search_item, field["source_field"])
+            else:
+                section_data = product_response.get(field["source_section"])
+                if isinstance(section_data, dict):
+                    row[dest_col] = extract_field(section_data, field["source_field"])
+                elif section_data is not None:
+                    row[dest_col] = section_data
+                else:
+                    row[dest_col] = None
+        return [row]
+
+    dot_idx = row_source.find(".")
+    section_name = row_source[:dot_idx]
+    inner_path = row_source[dot_idx + 1:]
+
+    section_data = product_response.get(section_name)
+    if section_data is None:
+        return []
+
+    leaf_tuples = navigate_path(section_data, inner_path)
+    if not leaf_tuples:
+        return []
+
+    leaf_prefix = inner_path + "."
+    rows = []
+    for leaf_item, ancestor_ctx in leaf_tuples:
+        row = {}
+        for field in table_mapping["fields"]:
+            phase = field.get("phase")
+            src_section = field["source_section"]
+            src_field = field["source_field"]
+            dest_col = field["dest_column"]
+
+            if phase == "search":
+                row[dest_col] = extract_field(search_item, src_field)
+            elif src_section == section_name:
+                if src_field.startswith(leaf_prefix):
+                    row[dest_col] = extract_field(leaf_item, src_field[len(leaf_prefix):])
+                elif src_field in ancestor_ctx:
+                    row[dest_col] = ancestor_ctx[src_field]
+                else:
+                    sec = product_response.get(src_section)
+                    row[dest_col] = extract_field(sec, src_field) if isinstance(sec, dict) else None
+            else:
+                other = product_response.get(src_section)
+                row[dest_col] = extract_field(other, src_field) if isinstance(other, dict) else other
+        rows.append(row)
+
+    return rows
+
+
 def build_mapped_search_row(item, table_mapping):
     """
     Extract mapped fields from a single search result item (e.g., one organic_results entry).
