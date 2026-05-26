@@ -10,9 +10,6 @@ from serpapi_amazon_search import (
     extract_field,
     navigate_path,
     build_rows_from_mapping,
-    build_mapped_search_row,
-    build_mapped_product_row,
-    build_row_from_mapping,
 )
 
 
@@ -148,123 +145,6 @@ def test_load_mapping_row_source_empty_string_exits(tmp_path):
     f.write_text(json.dumps(mapping))
     with pytest.raises(SystemExit):
         load_mapping(str(f))
-
-
-# ── build_mapped_search_row ──────────────────────────────────────────────────
-
-def test_build_mapped_search_row_extracts_fields():
-    item = {"asin": "B000NKI0V8", "title": "Test Product", "price": "$17.85", "rating": 4.4}
-    table_mapping = {"table": "products", "fields": [
-        {"source_section": "organic_results", "source_field": "asin",  "dest_column": "asin"},
-        {"source_section": "organic_results", "source_field": "title", "dest_column": "product_title"},
-        {"source_section": "organic_results", "source_field": "price", "dest_column": "price"},
-    ]}
-    row = build_mapped_search_row(item, table_mapping)
-    assert row == {"asin": "B000NKI0V8", "product_title": "Test Product", "price": "$17.85"}
-
-def test_build_mapped_search_row_missing_field_is_none():
-    item = {"asin": "B000NKI0V8"}
-    table_mapping = {"table": "products", "fields": [
-        {"source_section": "organic_results", "source_field": "asin",  "dest_column": "asin"},
-        {"source_section": "organic_results", "source_field": "price", "dest_column": "price"},
-    ]}
-    row = build_mapped_search_row(item, table_mapping)
-    assert row["asin"] == "B000NKI0V8"
-    assert row["price"] is None
-
-def test_build_mapped_search_row_nested_field():
-    item = {"rating": 4.4, "offers": {"savings": "$3.00"}}
-    table_mapping = {"table": "t", "fields": [
-        {"source_section": "s", "source_field": "offers.savings", "dest_column": "savings"},
-    ]}
-    row = build_mapped_search_row(item, table_mapping)
-    assert row["savings"] == "$3.00"
-
-
-# ── build_mapped_product_row ─────────────────────────────────────────────────
-
-def test_build_mapped_product_row_simple_field():
-    product_response = {
-        "product_results": {"title": "Test Product", "price": "$17.85"},
-    }
-    table_mapping = {"table": "products", "fields": [
-        {"source_section": "product_results", "source_field": "title", "dest_column": "product_title", "phase": "product"},
-        {"source_section": "product_results", "source_field": "price", "dest_column": "price",         "phase": "product"},
-    ]}
-    row = build_mapped_product_row(product_response, table_mapping)
-    assert row["product_title"] == "Test Product"
-    assert row["price"] == "$17.85"
-
-def test_build_mapped_product_row_array_section_stored_as_list():
-    product_response = {
-        "about_item": ["Feature 1", "Feature 2", "Feature 3"],
-    }
-    table_mapping = {"table": "products", "fields": [
-        {"source_section": "about_item", "source_field": "items", "dest_column": "bullets", "phase": "product"},
-    ]}
-    row = build_mapped_product_row(product_response, table_mapping)
-    assert row["bullets"] == ["Feature 1", "Feature 2", "Feature 3"]
-
-def test_build_mapped_product_row_nested_field():
-    product_response = {
-        "reviews_information": {"summary": {"text": "Great product overall."}},
-    }
-    table_mapping = {"table": "products", "fields": [
-        {"source_section": "reviews_information", "source_field": "summary.text", "dest_column": "ai_summary", "phase": "product"},
-    ]}
-    row = build_mapped_product_row(product_response, table_mapping)
-    assert row["ai_summary"] == "Great product overall."
-
-def test_build_mapped_product_row_missing_section_is_none():
-    product_response = {}
-    table_mapping = {"table": "t", "fields": [
-        {"source_section": "product_results", "source_field": "title", "dest_column": "title", "phase": "product"},
-    ]}
-    row = build_mapped_product_row(product_response, table_mapping)
-    assert row["title"] is None
-
-
-# ── build_row_from_mapping ───────────────────────────────────────────────────
-
-def test_build_row_from_mapping_merges_phases():
-    search_item = {"asin": "B000NKI0V8", "title": "Search Title", "price": "$17.85"}
-    product_response = {
-        "product_results": {"title": "Product Title", "rating": 4.4},
-        "about_item": ["Feature 1"],
-    }
-    table_mapping = {"table": "products", "fields": [
-        {"source_section": "organic_results", "source_field": "asin",   "dest_column": "asin",          "phase": "search"},
-        {"source_section": "organic_results", "source_field": "title",  "dest_column": "search_title",  "phase": "search"},
-        {"source_section": "organic_results", "source_field": "price",  "dest_column": "search_price",  "phase": "search"},
-        {"source_section": "product_results", "source_field": "title",  "dest_column": "product_title", "phase": "product"},
-        {"source_section": "product_results", "source_field": "rating", "dest_column": "rating",        "phase": "product"},
-        {"source_section": "about_item",      "source_field": "items",  "dest_column": "bullets",       "phase": "product"},
-    ]}
-    row = build_row_from_mapping(search_item, product_response, table_mapping)
-    assert row["asin"] == "B000NKI0V8"
-    assert row["search_title"] == "Search Title"
-    assert row["search_price"] == "$17.85"
-    assert row["product_title"] == "Product Title"
-    assert row["rating"] == 4.4
-    assert row["bullets"] == ["Feature 1"]
-
-def test_build_row_from_mapping_missing_search_field_is_none():
-    search_item = {"asin": "B1"}
-    product_response = {}
-    table_mapping = {"table": "t", "fields": [
-        {"source_section": "organic_results", "source_field": "price", "dest_column": "price", "phase": "search"},
-    ]}
-    row = build_row_from_mapping(search_item, product_response, table_mapping)
-    assert row["price"] is None
-
-def test_build_row_from_mapping_missing_product_section_is_none():
-    search_item = {}
-    product_response = {}
-    table_mapping = {"table": "t", "fields": [
-        {"source_section": "product_results", "source_field": "rating", "dest_column": "rating", "phase": "product"},
-    ]}
-    row = build_row_from_mapping(search_item, product_response, table_mapping)
-    assert row["rating"] is None
 
 
 # ── navigate_path ─────────────────────────────────────────────────────────────

@@ -336,65 +336,6 @@ def build_rows_from_mapping(search_item, product_response, table_mapping):
     return rows
 
 
-def build_mapped_search_row(item, table_mapping):
-    """
-    Extract mapped fields from a single search result item (e.g., one organic_results entry).
-    source_section is ignored — all fields are extracted directly from item.
-    Returns {dest_column: value} dict.
-    """
-    row = {}
-    for field in table_mapping["fields"]:
-        row[field["dest_column"]] = extract_field(item, field["source_field"])
-    return row
-
-
-def build_mapped_product_row(product_response, table_mapping):
-    """
-    Extract mapped fields from a full product API response dict (keyed by section name).
-    Array sections are stored as-is (JSON). Nested dict fields use dot notation.
-    Returns {dest_column: value} dict.
-    """
-    row = {}
-    for field in table_mapping["fields"]:
-        section_data = product_response.get(field["source_section"])
-        dest_col = field["dest_column"]
-        if section_data is None:
-            row[dest_col] = None
-        elif isinstance(section_data, list):
-            row[dest_col] = section_data
-        elif isinstance(section_data, dict):
-            row[dest_col] = extract_field(section_data, field["source_field"])
-        else:
-            row[dest_col] = section_data
-    return row
-
-
-def build_row_from_mapping(search_item, product_response, table_mapping):
-    """
-    Build a single merged row from both search and product API data (two-phase, Branch B1).
-    phase:'search' fields come from search_item; phase:'product' fields from product_response.
-    Returns {dest_column: value} dict.
-    """
-    row = {}
-    for field in table_mapping["fields"]:
-        phase = field.get("phase")
-        dest_col = field["dest_column"]
-
-        if phase == "search":
-            row[dest_col] = extract_field(search_item, field["source_field"])
-        else:
-            section_data = product_response.get(field["source_section"])
-            if section_data is None:
-                row[dest_col] = None
-            elif isinstance(section_data, list):
-                row[dest_col] = section_data
-            elif isinstance(section_data, dict):
-                row[dest_col] = extract_field(section_data, field["source_field"])
-            else:
-                row[dest_col] = section_data
-    return row
-
-
 def write_csv(rows, path):
     import csv
     if not rows:
