@@ -1,75 +1,68 @@
 #!/usr/bin/env python3
 """
-Generic Amazon search/product data extractor via SerpAPI.
-Saves structured results to a configurable Supabase table.
+Amazon SerpAPI cache-first fetcher.
 
-Modes:
-  --search_phrase  Keyword search (engine=amazon). Auto two-stage if product
-                   sections are requested: extracts ASINs then calls
-                   engine=amazon_product for each.
-  --asin           Direct product lookup (engine=amazon_product).
+Checks Supabase for fresh data before calling the API.
+Stores raw API sections as JSONB columns in intermediary tables.
+Emits JSON lines + STATS to stdout for the calling skill.
 
 Usage:
-  python serpapi_amazon_search.py --search_phrase "weight loss supplements" \
-    --sections "organic_results,reviews_information,about_item" \
-    --table amazon_results \
-    --supabase_url https://xxx.supabase.co \
-    --supabase_key SERVICE_ROLE_KEY \
-    [--run_id UUID] [--max_asins 10]
+  python serpapi_amazon_search.py --search_phrase "espresso machine" --max_asins 10
+  python serpapi_amazon_search.py --asin B09XXXXX
 """
 
 import argparse
 import json
 import os
+import re
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SERPAPI_URL = "https://serpapi.com/search"
-
-# Sections returned by engine=amazon (search term mode)
-SEARCH_SECTIONS = {
-    "organic_results",
-    "featured_products",
-    "product_ads",
-    "related_searches",
-    "sponsored_brands",
-    "video_results",
-}
-
-# Sections returned by engine=amazon_product (ASIN mode or two-stage)
-PRODUCT_SECTIONS = {
-    "product_results",
-    "reviews_information",
-    "about_item",
-    "product_features",
-    "product_details",
-    "item_specifications",
-    "item_ingredients",
-    "prices",
-    "purchase_options",
-    "bought_together",
-    "compare_with_similar",
-    "related_products",
-    "other_sellers",
-    "protection_plan",
-    "sustainability_features",
-    "product_description",
-    "product_sponsored_brands",
-    "product_videos",
-    "similar_product_videos",
-}
-
-# Maps skill section names to actual SerpAPI response keys
-PRODUCT_SECTION_KEY_MAP = {
-    "product_sponsored_brands": "sponsored_brands",
-    "product_videos": "videos",
-}
 
 VALID_DOMAINS = {
     "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.de",
     "amazon.fr", "amazon.es", "amazon.it", "amazon.co.jp",
     "amazon.in", "amazon.com.au", "amazon.com.mx",
+}
+
+# Columns in amazon_search_cache that hold API section data (nullable JSONB).
+# Keys match both the SerpAPI response keys and the Supabase column names.
+SEARCH_SECTION_COLS = {
+    "search_information",
+    "organic_results",
+    "featured_products",
+    "product_ads",
+    "sponsored_brands",
+    "video_results",
+    "related_searches",
+    "categories",
+    "filters",
+}
+
+# Columns in amazon_product_cache that hold API section data (nullable JSONB).
+PRODUCT_SECTION_COLS = {
+    "product_results",
+    "purchase_options",
+    "prices",
+    "other_sellers",
+    "protection_plan",
+    "about_item",
+    "item_specifications",
+    "item_ingredients",
+    "product_details",
+    "product_description",
+    "product_features",
+    "reviews_information",
+    "bought_together",
+    "related_products",
+    "compare_with_similar",
+    "videos",
+    "similar_product_videos",
+    "sustainability_features",
+    "sponsored_brands",
 }
 
 
@@ -90,36 +83,16 @@ def load_env():
             return
 
 
-
 def serpapi_get(api_key, params):
     try:
         import requests
     except ImportError:
         print("ERROR: requests library not installed. Run: pip install requests")
         sys.exit(1)
-
     params = {**params, "api_key": api_key}
     resp = requests.get(SERPAPI_URL, params=params, timeout=60)
     resp.raise_for_status()
     return resp.json()
-
-
-def supabase_insert(supabase_url, secret_key, table, row):
-    try:
-        import requests
-    except ImportError:
-        print("ERROR: requests library not installed. Run: pip install requests")
-        sys.exit(1)
-
-    url = f"{supabase_url.rstrip('/')}/rest/v1/{table}"
-    headers = {
-        "apikey": secret_key,
-        "Authorization": f"Bearer {secret_key}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal",
-    }
-    resp = requests.post(url, headers=headers, json=row, timeout=30)
-    resp.raise_for_status()
 
 
 def search_amazon(api_key, phrase, country="amazon.com", page=1):
@@ -139,424 +112,330 @@ def fetch_product(api_key, asin, country="amazon.com"):
     })
 
 
-def extract_asins_from_search(search_data):
-    asins = []
-    for item in search_data.get("organic_results", []):
-        asin = item.get("asin")
-        if asin and asin not in asins:
-            asins.append(asin)
-    return asins
+def clean_search_term(term: str) -> str:
+    term = term.lower().strip()
+    term = re.sub(r"\s+", "-", term)
+    term = re.sub(r"[^a-z0-9-]", "", term)
+    term = re.sub(r"-+", "-", term)
+    return term.strip("-")
 
 
-# ── Mapping helpers ───────────────────────────────────────────────────────────
+def get_supabase_config():
+    """Load Supabase creds from environment. Call load_env() first."""
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SECRET_KEY")
+    if not url:
+        print("ERROR: SUPABASE_URL not found in environment or .env")
+        sys.exit(1)
+    if not key:
+        print("ERROR: SUPABASE_SECRET_KEY not found in environment or .env")
+        sys.exit(1)
+    return {"url": url.rstrip("/"), "key": key}
 
-def load_mapping(path):
-    """Load and validate a mapping JSON file. Returns list of table mapping dicts."""
+
+def _supabase_headers(config):
+    return {
+        "apikey": config["key"],
+        "Authorization": f"Bearer {config['key']}",
+        "Content-Type": "application/json",
+    }
+
+
+def _supabase_get(config, table, params):
+    """GET rows from Supabase REST API. Returns list of row dicts."""
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        print(f"ERROR: Mapping file not found: {path}")
+        import requests
+    except ImportError:
+        print("ERROR: requests library not installed. Run: pip install requests")
         sys.exit(1)
-    except json.JSONDecodeError as e:
-        print(f"ERROR: Mapping file is not valid JSON: {e}")
+    url = f"{config['url']}/rest/v1/{table}"
+    headers = {**_supabase_headers(config), "Accept": "application/json"}
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _supabase_post(config, table, row):
+    """INSERT a row into Supabase REST API. Returns inserted row dict (with id)."""
+    try:
+        import requests
+    except ImportError:
+        print("ERROR: requests library not installed. Run: pip install requests")
         sys.exit(1)
-
-    if isinstance(data, dict):
-        data = [data]
-
-    for i, entry in enumerate(data):
-        if "table" not in entry:
-            print(f"ERROR: Mapping entry {i} missing required field 'table'")
-            sys.exit(1)
-        if "fields" not in entry or not isinstance(entry["fields"], list):
-            print(f"ERROR: Mapping entry {i} missing required field 'fields' (must be a list)")
-            sys.exit(1)
-        for j, field in enumerate(entry["fields"]):
-            for required in ("source_section", "source_field", "dest_column"):
-                if required not in field:
-                    print(f"ERROR: Mapping entry {i}, field {j} missing '{required}'")
-                    sys.exit(1)
-            phase = field.get("phase")
-            if phase is not None and phase not in ("search", "product"):
-                print(f"ERROR: Mapping entry {i}, field {j} has invalid phase '{phase}' "
-                      f"(must be 'search' or 'product')")
-                sys.exit(1)
-
-        row_source = entry.get("row_source")
-        if row_source is not None:
-            if not isinstance(row_source, str) or not row_source:
-                print(f"ERROR: Mapping entry {i} has invalid row_source "
-                      f"(must be a non-empty dot-path string or null)")
-                sys.exit(1)
-            if "." not in row_source:
-                print(f"ERROR: Mapping entry {i} row_source '{row_source}' must include "
-                      f"a section prefix (e.g. 'reviews_information.authors_reviews')")
-                sys.exit(1)
-
-    return data
+    url = f"{config['url']}/rest/v1/{table}"
+    headers = {**_supabase_headers(config), "Prefer": "return=representation"}
+    resp = requests.post(url, headers=headers, json=row, timeout=30)
+    resp.raise_for_status()
+    rows = resp.json()
+    return rows[0] if rows else {}
 
 
-def extract_field(obj, field_path):
-    """Dot-notation accessor for nested dicts. Returns None if any key is missing."""
-    if not isinstance(obj, dict):
-        return None
-    current = obj
-    for part in field_path.split("."):
-        if not isinstance(current, dict):
-            return None
-        current = current.get(part)
-        if current is None:
-            return None
-    return current
+_SERPAPI_META_KEYS = {"search_metadata", "search_parameters", "serpapi_pagination"}
 
 
-def _navigate(current, remaining, path_parts, ancestor_ctx, results):
-    if not remaining:
-        if isinstance(current, list):
-            for item in current:
-                results.append((item, dict(ancestor_ctx)))
-        elif current is not None:
-            results.append((current, dict(ancestor_ctx)))
-        return
-
-    if isinstance(current, list):
-        for item in current:
-            _navigate(item, remaining, path_parts, ancestor_ctx, results)
-        return
-
-    if not isinstance(current, dict):
-        return
-
-    next_part = remaining[0]
-    rest = remaining[1:]
-    value = current.get(next_part)
-    if value is None:
-        return
-
-    new_path = path_parts + [next_part]
-
-    if isinstance(value, list):
-        new_ctx = dict(ancestor_ctx)
-        for k, v in current.items():
-            if k != next_part and not isinstance(v, (list, dict)):
-                new_ctx[".".join(path_parts + [k])] = v
-        if rest:
-            for item in value:
-                _navigate(item, rest, new_path, new_ctx, results)
-        else:
-            for item in value:
-                results.append((item, dict(new_ctx)))
-    else:
-        _navigate(value, rest, new_path, ancestor_ctx, results)
+def strip_serpapi_metadata(response: dict) -> dict:
+    """Return a copy of response with SerpAPI housekeeping keys removed."""
+    return {k: v for k, v in response.items() if k not in _SERPAPI_META_KEYS}
 
 
-def navigate_path(obj, path):
+def extract_top_asins(organic_results: list, max_asins: int) -> list:
     """
-    Traverse a dot-path through nested dicts/lists.
-    Returns list of (leaf_item, ancestor_ctx) tuples.
-    ancestor_ctx maps section-root-relative path strings to scalar values
-    captured at each list boundary during traversal.
+    Return list of (position, asin) tuples from organic_results.
+    position = original index in organic_results (0-based).
+    Skips items without an 'asin' key. Returns at most max_asins items.
     """
-    if not path or obj is None:
-        return []
-    parts = path.split(".")
-    results = []
-    _navigate(obj, parts, [], {}, results)
-    return results
+    result = []
+    for i, item in enumerate(organic_results):
+        asin = item.get("asin")
+        if asin:
+            result.append((i, asin))
+        if len(result) == max_asins:
+            break
+    return result
 
 
-def build_rows_from_mapping(search_item, product_response, table_mapping):
+def _ttl_cutoff(ttl_days: int) -> str:
+    """ISO 8601 timestamp for the oldest acceptable fetched_at."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
+    return cutoff.isoformat()
+
+
+def cache_lookup_search(config, search_phrase, country, pages, ttl_days) -> dict | None:
     """
-    Build a list of rows from a table mapping.
-
-    row_source=None  → scalar mode: one row per call, direct field extraction.
-    row_source="section.inner.path" → list mode: one row per leaf item in that list.
-      - phase="search" fields: extracted from search_item (duplicated across all rows).
-      - Leaf fields: source_field starts with inner_path+"." — extracted from each leaf item.
-      - Ancestor fields: source_field found in ancestor_ctx captured during list traversal.
-      - Other sections: extracted from product_response directly.
+    Return the most recent fresh amazon_search_cache row, or None.
+    Fresh = fetched_at within ttl_days.
     """
-    row_source = table_mapping.get("row_source")
-
-    if row_source is None:
-        row = {}
-        for field in table_mapping["fields"]:
-            phase = field.get("phase")
-            dest_col = field["dest_column"]
-            if phase == "search":
-                row[dest_col] = extract_field(search_item, field["source_field"])
-            else:
-                section_data = product_response.get(field["source_section"])
-                if isinstance(section_data, dict):
-                    row[dest_col] = extract_field(section_data, field["source_field"])
-                elif section_data is not None:
-                    row[dest_col] = section_data
-                else:
-                    row[dest_col] = None
-        return [row]
-
-    dot_idx = row_source.find(".")
-    section_name = row_source[:dot_idx]
-    inner_path = row_source[dot_idx + 1:]
-
-    section_data = product_response.get(section_name)
-    if section_data is None:
-        return []
-
-    leaf_tuples = navigate_path(section_data, inner_path)
-    if not leaf_tuples:
-        return []
-
-    leaf_prefix = inner_path + "."
-    rows = []
-    for leaf_item, ancestor_ctx in leaf_tuples:
-        row = {}
-        for field in table_mapping["fields"]:
-            phase = field.get("phase")
-            src_section = field["source_section"]
-            src_field = field["source_field"]
-            dest_col = field["dest_column"]
-
-            if phase == "search":
-                row[dest_col] = extract_field(search_item, src_field)
-            elif src_section == section_name:
-                if src_field.startswith(leaf_prefix):
-                    row[dest_col] = extract_field(leaf_item, src_field[len(leaf_prefix):])
-                elif src_field in ancestor_ctx:
-                    row[dest_col] = ancestor_ctx[src_field]
-                else:
-                    sec = product_response.get(src_section)
-                    row[dest_col] = extract_field(sec, src_field) if isinstance(sec, dict) else None
-            else:
-                other = product_response.get(src_section)
-                row[dest_col] = extract_field(other, src_field) if isinstance(other, dict) else other
-        rows.append(row)
-
-    return rows
+    rows = _supabase_get(config, "amazon_search_cache", {
+        "search_phrase": f"eq.{search_phrase}",
+        "country": f"eq.{country}",
+        "pages": f"eq.{pages}",
+        "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
+        "order": "fetched_at.desc",
+        "limit": 1,
+    })
+    return rows[0] if rows else None
 
 
-def write_csv(rows, path):
-    import csv
-    if not rows:
-        print("WARNING: No rows to write to CSV.")
-        return
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(dict.fromkeys(k for row in rows for k in row))
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"CSV written: {path} ({len(rows)} rows)")
+def cache_lookup_product(config, asin, country, ttl_days) -> dict | None:
+    """
+    Return the most recent fresh amazon_product_cache row for this ASIN, or None.
+    """
+    rows = _supabase_get(config, "amazon_product_cache", {
+        "asin": f"eq.{asin}",
+        "country": f"eq.{country}",
+        "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
+        "order": "fetched_at.desc",
+        "limit": 1,
+    })
+    return rows[0] if rows else None
 
 
-def write_csv_by_table(csv_rows_by_table, output_folder, phrase_label):
-    """Write one dated CSV per table entry when --csv_output is a folder (multiple destinations)."""
-    import csv
-    import re
-    from datetime import date
-    folder = Path(output_folder)
-    folder.mkdir(parents=True, exist_ok=True)
-    today = date.today().strftime("%Y-%m-%d")
-    safe_label = re.sub(r"[^a-z0-9-]", "", re.sub(r"\s+", "-", phrase_label.lower())).strip("-")
-    for table_name, rows in csv_rows_by_table.items():
-        if not rows:
-            continue
-        file_path = folder / f"{today}_{safe_label}_{table_name}.csv"
-        fieldnames = list(dict.fromkeys(k for row in rows for k in row))
-        with open(file_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"CSV written: {file_path} ({len(rows)} rows)")
+def store_search_result(config, search_phrase, country, pages, api_response) -> str:
+    """
+    Strip SerpAPI metadata, store search API response in amazon_search_cache.
+    Returns the UUID of the inserted row.
+    """
+    cleaned = strip_serpapi_metadata(api_response)
+    organic = cleaned.get("organic_results") or []
+    row = {
+        "search_phrase": search_phrase,
+        "country": country,
+        "pages": pages,
+        "result_count": len(organic),
+    }
+    for col in SEARCH_SECTION_COLS:
+        if col in cleaned:
+            row[col] = json.dumps(cleaned[col])
+    inserted = _supabase_post(config, "amazon_search_cache", row)
+    return inserted["id"]
+
+
+def store_product_result(config, asin, country, api_response) -> str:
+    """
+    Strip SerpAPI metadata, store product API response in amazon_product_cache.
+    Returns the UUID of the inserted row.
+    """
+    cleaned = strip_serpapi_metadata(api_response)
+    row = {
+        "asin": asin,
+        "country": country,
+    }
+    for col in PRODUCT_SECTION_COLS:
+        if col in cleaned:
+            row[col] = json.dumps(cleaned[col])
+    inserted = _supabase_post(config, "amazon_product_cache", row)
+    return inserted["id"]
+
+
+def store_search_product_link(config, search_cache_id, product_cache_id, position):
+    """
+    Insert a row into amazon_search_product_link.
+    ON CONFLICT is handled at the DB level (PRIMARY KEY constraint);
+    if the link already exists the insert will error — callers should
+    check for existing links before calling, or handle the exception.
+    """
+    _supabase_post(config, "amazon_search_product_link", {
+        "search_cache_id": search_cache_id,
+        "product_cache_id": product_cache_id,
+        "position": position,
+    })
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Amazon SerpAPI extractor")
+    parser = argparse.ArgumentParser(description="Amazon SerpAPI cache-first fetcher")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--search_phrase", help="Keyword to search on Amazon")
     group.add_argument("--asin", help="Amazon ASIN for direct product lookup")
-    parser.add_argument("--sections", required=True,
-                        help="Comma-separated section names to fetch")
-    parser.add_argument("--supabase_url", default=None,
-                        help="Supabase project URL")
-    parser.add_argument("--supabase_key", default=None,
-                        help="Supabase service role key")
-    parser.add_argument("--csv_output", default=None,
-                        help="Local CSV file path for output (no Supabase required)")
-    parser.add_argument("--run_id", default=None,
-                        help="Optional run UUID for linking results")
-    parser.add_argument("--max_asins", type=int, default=10,
-                        help="Max ASINs to fetch in two-stage mode (default: 10)")
     parser.add_argument("--country", default="amazon.com",
-                        help="Amazon domain (e.g. amazon.com, amazon.co.uk)")
+                        help="Amazon domain (default: amazon.com)")
     parser.add_argument("--pages", type=int, default=1,
-                        help="Number of search result pages to fetch (default: 1)")
-    parser.add_argument("--mapping", required=True,
-                        help="Path to mapping JSON file")
+                        help="Search result pages to fetch (default: 1)")
+    parser.add_argument("--max_asins", type=int, default=10,
+                        help="Max products to fetch details for (default: 10)")
+    parser.add_argument("--ttl_days", type=int, default=7,
+                        help="Cache freshness in days (default: 7)")
+    parser.add_argument("--run_id", default=None,
+                        help="Optional run UUID passed through to STATS line")
     args = parser.parse_args()
 
     if args.country not in VALID_DOMAINS:
-        print(f"ERROR: Invalid country '{args.country}'. Must be one of: {', '.join(sorted(VALID_DOMAINS))}")
-        sys.exit(1)
-
-    has_csv = bool(args.csv_output)
-    has_supabase = bool(args.supabase_url and args.supabase_key)
-    if not has_supabase and not has_csv:
-        print("ERROR: --mapping requires --supabase_url and --supabase_key, or --csv_output.")
+        print(f"ERROR: Invalid country '{args.country}'. Must be one of: "
+              f"{', '.join(sorted(VALID_DOMAINS))}")
         sys.exit(1)
 
     load_env()
 
-    mapping = load_mapping(args.mapping)
-
     serpapi_key = os.environ.get("SERPAPI_API_KEY")
     if not serpapi_key:
-        print("ERROR: SERPAPI_API_KEY is not set in environment or .env file.")
+        print("ERROR: SERPAPI_API_KEY not found in environment or .env")
         sys.exit(1)
 
-    requested_sections = [s.strip() for s in args.sections.split(",") if s.strip()]
-    unknown = [s for s in requested_sections
-               if s not in SEARCH_SECTIONS and s not in PRODUCT_SECTIONS]
-    if unknown:
-        print(f"WARNING: Unknown sections will be ignored: {', '.join(unknown)}")
-        requested_sections = [s for s in requested_sections if s not in unknown]
+    config = get_supabase_config()
 
-    has_product_sections = any(s in PRODUCT_SECTIONS for s in requested_sections)
-    rows_saved = 0
-    failed = 0
-    csv_rows = []
-    # Multi-table CSV mode: mapping has more than 1 table entry.
-    # csv_output is treated as a folder; one file is written per table.
-    csv_output_is_dir = bool(args.csv_output and mapping and len(mapping) > 1)
-    csv_rows_by_table: dict = {}
+    items_fetched = 0
+    items_cached = 0
+    items_stored = 0
+    search_cache_id = None
+    product_cache_ids = []
 
     if args.asin:
-        # --- ASIN mode ---
-        phrase_label = f"ASIN:{args.asin}"
-        print(f"Fetching product page for ASIN {args.asin}...")
-        try:
-            product_data = fetch_product(serpapi_key, args.asin, country=args.country)
-
-            for table_mapping in mapping:
-                new_rows = build_rows_from_mapping({}, product_data, table_mapping)
-                for r in new_rows:
-                    if args.run_id:
-                        r["run_id"] = args.run_id
-                    if has_supabase:
-                        supabase_insert(args.supabase_url, args.supabase_key,
-                                        table_mapping["table"], r)
-                    if has_csv:
-                        if csv_output_is_dir:
-                            csv_rows_by_table.setdefault(table_mapping["table"], []).append(r)
-                        else:
-                            csv_rows.append(r)
-                rows_saved += len(new_rows)
-
-        except Exception as e:
-            print(f"WARNING: Failed to fetch/save ASIN {args.asin}: {e}")
-            failed += 1
-
-        if has_csv:
-            if csv_output_is_dir:
-                write_csv_by_table(csv_rows_by_table, args.csv_output, phrase_label)
-            else:
-                write_csv(csv_rows, args.csv_output)
-        print(f"STATS:mode=asin,search_phrase={phrase_label},"
-              f"products=1,rows_saved={rows_saved},failed={failed}")
+        # ── ASIN mode: product API only ──────────────────────────────────────
+        prod_row = cache_lookup_product(config, args.asin, args.country, args.ttl_days)
+        if prod_row:
+            product_cache_ids.append(prod_row["id"])
+            items_cached += 1
+            print(json.dumps({
+                "status": "cached",
+                "asin": args.asin,
+                "product_cache_id": prod_row["id"],
+            }))
+        else:
+            try:
+                response = fetch_product(serpapi_key, args.asin, country=args.country)
+                items_fetched += 1
+                product_cache_id = store_product_result(
+                    config, args.asin, args.country, response
+                )
+                product_cache_ids.append(product_cache_id)
+                items_stored += 1
+                print(json.dumps({
+                    "status": "stored",
+                    "asin": args.asin,
+                    "product_cache_id": product_cache_id,
+                }))
+            except Exception as e:
+                print(f"ERROR: Failed to fetch/store ASIN {args.asin}: {e}")
+                sys.exit(1)
 
     else:
-        # --- Search Term mode ---
-        phrase_label = args.search_phrase
-        print(f"Searching Amazon for: {phrase_label}")
+        # ── Search term mode: search API + product API ───────────────────────
+        normalized = clean_search_term(args.search_phrase)
 
-        all_search_data = {}
-        for page_num in range(1, args.pages + 1):
-            try:
-                page_data = search_amazon(serpapi_key, args.search_phrase,
-                                          country=args.country, page=page_num)
-            except Exception as e:
-                print(f"ERROR: Amazon search failed (page {page_num}): {e}")
-                sys.exit(1)
-            for section in SEARCH_SECTIONS:
-                if section in page_data:
-                    val = page_data[section]
-                    if isinstance(val, list):
-                        all_search_data.setdefault(section, []).extend(val)
-                    else:
-                        all_search_data[section] = val
-            if page_num == 1 and "search_information" in page_data:
-                all_search_data["search_information"] = page_data["search_information"]
-
-        search_data = all_search_data
-
-        products = len(search_data.get("organic_results", []))
-
-        if has_product_sections:
-            # Two-phase — one merged row per ASIN
-            asins = extract_asins_from_search(search_data)[:args.max_asins]
-            search_items_by_asin = {
-                item.get("asin"): item
-                for item in search_data.get("organic_results", [])
-                if item.get("asin")
-            }
-            print(f"Fetching product data for {len(asins)} ASINs...")
-            for asin in asins:
+        # Step 1: check search cache
+        search_row = cache_lookup_search(
+            config, normalized, args.country, args.pages, args.ttl_days
+        )
+        if search_row:
+            search_cache_id = search_row["id"]
+            organic = json.loads(search_row.get("organic_results") or "[]")
+        else:
+            # Fetch search API
+            print(f"Fetching search results for: {args.search_phrase}")
+            all_organic = []
+            combined = {}
+            for page_num in range(1, args.pages + 1):
                 try:
-                    product_data = fetch_product(serpapi_key, asin, country=args.country)
-                    search_item = search_items_by_asin.get(asin, {})
-                    for table_mapping in mapping:
-                        new_rows = build_rows_from_mapping(search_item, product_data, table_mapping)
-                        for r in new_rows:
-                            if args.run_id:
-                                r["run_id"] = args.run_id
-                            if args.search_phrase:
-                                r["search_phrase"] = args.search_phrase
-                            if has_supabase:
-                                supabase_insert(args.supabase_url, args.supabase_key,
-                                                table_mapping["table"], r)
-                            if has_csv:
-                                if csv_output_is_dir:
-                                    csv_rows_by_table.setdefault(table_mapping["table"], []).append(r)
-                                else:
-                                    csv_rows.append(r)
-                        rows_saved += len(new_rows)
+                    page_data = search_amazon(
+                        serpapi_key, args.search_phrase,
+                        country=args.country, page=page_num
+                    )
+                    items_fetched += 1
+                    all_organic.extend(page_data.get("organic_results", []))
+                    if page_num == 1:
+                        combined = page_data
+                    else:
+                        combined.setdefault("organic_results", []).extend(
+                            page_data.get("organic_results", [])
+                        )
+                except Exception as e:
+                    print(f"ERROR: Search API failed (page {page_num}): {e}")
+                    sys.exit(1)
+
+            combined["organic_results"] = all_organic
+            search_cache_id = store_search_result(
+                config, normalized, args.country, args.pages, combined
+            )
+            items_stored += 1
+            organic = all_organic
+
+        # Step 2: for each top ASIN, check product cache or fetch
+        top_asins = extract_top_asins(organic, args.max_asins)
+        print(f"Processing {len(top_asins)} ASINs...")
+
+        for position, asin in top_asins:
+            prod_row = cache_lookup_product(config, asin, args.country, args.ttl_days)
+            if prod_row:
+                product_cache_id = prod_row["id"]
+                items_cached += 1
+                print(json.dumps({
+                    "status": "cached",
+                    "asin": asin,
+                    "product_cache_id": product_cache_id,
+                }))
+            else:
+                try:
+                    response = fetch_product(serpapi_key, asin, country=args.country)
+                    items_fetched += 1
+                    product_cache_id = store_product_result(
+                        config, asin, args.country, response
+                    )
+                    items_stored += 1
+                    print(json.dumps({
+                        "status": "stored",
+                        "asin": asin,
+                        "product_cache_id": product_cache_id,
+                    }))
                     time.sleep(0.3)
                 except Exception as e:
-                    print(f"WARNING: Failed for ASIN {asin}: {e}")
-                    failed += 1
-        else:
-            # Search data only — one row per organic_result item
-            items = search_data.get("organic_results", [])
-            for item in items:
-                try:
-                    for table_mapping in mapping:
-                        new_rows = build_rows_from_mapping(item, {}, table_mapping)
-                        for r in new_rows:
-                            if args.run_id:
-                                r["run_id"] = args.run_id
-                            if args.search_phrase:
-                                r["search_phrase"] = args.search_phrase
-                            if has_supabase:
-                                supabase_insert(args.supabase_url, args.supabase_key,
-                                                table_mapping["table"], r)
-                            if has_csv:
-                                if csv_output_is_dir:
-                                    csv_rows_by_table.setdefault(table_mapping["table"], []).append(r)
-                                else:
-                                    csv_rows.append(r)
-                        rows_saved += len(new_rows)
-                except Exception as e:
-                    print(f"WARNING: Failed to save search row: {e}")
-                    failed += 1
+                    print(f"WARNING: Failed to fetch/store ASIN {asin}: {e}")
+                    continue
 
-        if has_csv:
-            if csv_output_is_dir:
-                write_csv_by_table(csv_rows_by_table, args.csv_output, phrase_label)
-            else:
-                write_csv(csv_rows, args.csv_output)
-        print(f"STATS:mode=search,search_phrase={phrase_label},"
-              f"products={products},rows_saved={rows_saved},failed={failed}")
+            product_cache_ids.append(product_cache_id)
+            try:
+                store_search_product_link(config, search_cache_id, product_cache_id, position)
+            except Exception:
+                pass  # link may already exist if ASIN was cached from a prior search
+
+    product_ids_csv = ",".join(product_cache_ids)
+    print(
+        f"STATS:mode={'asin' if args.asin else 'search_term'},"
+        f"search_cache_id={search_cache_id or 'null'},"
+        f"product_cache_ids={product_ids_csv},"
+        f"items_fetched={items_fetched},"
+        f"items_cached={items_cached},"
+        f"items_stored={items_stored},"
+        f"run_id={args.run_id or 'null'}"
+    )
 
 
 if __name__ == "__main__":
