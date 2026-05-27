@@ -124,7 +124,7 @@ def test_cache_lookup_search_hit(monkeypatch):
         lambda config, table, params: [fake_row]
     )
     config = {"url": "https://x.supabase.co", "key": "k"}
-    result = cache_lookup_search(config, "coffee", "walmart.com", pages=1, ttl_days=7)
+    result = cache_lookup_search(config, "coffee", "walmart.com", ttl_days=7)
     assert result == fake_row
 
 
@@ -134,7 +134,7 @@ def test_cache_lookup_search_miss(monkeypatch):
         lambda config, table, params: []
     )
     config = {"url": "https://x.supabase.co", "key": "k"}
-    result = cache_lookup_search(config, "coffee", "walmart.com", pages=1, ttl_days=7)
+    result = cache_lookup_search(config, "coffee", "walmart.com", ttl_days=7)
     assert result is None
 
 
@@ -146,11 +146,11 @@ def test_cache_lookup_search_passes_correct_params(monkeypatch):
         return []
     monkeypatch.setattr("serpapi_walmart_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
-    cache_lookup_search(config, "protein powder", "walmart.com.mx", pages=2, ttl_days=3)
+    cache_lookup_search(config, "protein powder", "walmart.com.mx", ttl_days=3)
     assert captured["table"] == "serpapi_walmart_search_cache"
     assert captured["params"]["search_phrase"] == "eq.protein powder"
     assert captured["params"]["country"] == "eq.walmart.com.mx"
-    assert captured["params"]["pages"] == "eq.2"
+    assert "pages" not in captured["params"]
     assert "fetched_at" in captured["params"]
 
 

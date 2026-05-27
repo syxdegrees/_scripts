@@ -121,7 +121,7 @@ def test_cache_lookup_search_hit(monkeypatch):
         lambda config, table, params: [fake_row]
     )
     config = {"url": "https://x.supabase.co", "key": "k"}
-    result = cache_lookup_search(config, "circular-saw", "homedepot.com", pages=1, ttl_days=30)
+    result = cache_lookup_search(config, "circular-saw", "homedepot.com", ttl_days=30)
     assert result == fake_row
 
 
@@ -131,7 +131,7 @@ def test_cache_lookup_search_miss(monkeypatch):
         lambda config, table, params: []
     )
     config = {"url": "https://x.supabase.co", "key": "k"}
-    result = cache_lookup_search(config, "circular-saw", "homedepot.com", pages=1, ttl_days=30)
+    result = cache_lookup_search(config, "circular-saw", "homedepot.com", ttl_days=30)
     assert result is None
 
 
@@ -143,11 +143,11 @@ def test_cache_lookup_search_passes_correct_params(monkeypatch):
         return []
     monkeypatch.setattr("serpapi_home_depot_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
-    cache_lookup_search(config, "power-drill", "homedepot.ca", pages=2, ttl_days=30)
+    cache_lookup_search(config, "power-drill", "homedepot.ca", ttl_days=30)
     assert captured["table"] == "serpapi_home_depot_search_cache"
     assert captured["params"]["search_phrase"] == "eq.power-drill"
     assert captured["params"]["domain"] == "eq.homedepot.ca"
-    assert captured["params"]["pages"] == "eq.2"
+    assert "pages" not in captured["params"]
     assert "fetched_at" in captured["params"]
 
 

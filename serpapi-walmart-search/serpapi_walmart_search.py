@@ -183,6 +183,21 @@ def _supabase_post(config, table, row):
     return rows[0] if rows else {}
 
 
+def _supabase_patch(config, table, row_id, updates):
+    """PATCH (partial update) a row in Supabase REST API by ID."""
+    try:
+        import requests
+    except ImportError:
+        print("ERROR: requests library not installed. Run: pip install requests")
+        sys.exit(1)
+    url = f"{config['url']}/rest/v1/{table}"
+    headers = {**_supabase_headers(config), "Prefer": "return=representation"}
+    resp = requests.patch(url, headers=headers, params={"id": f"eq.{row_id}"}, json=updates, timeout=30)
+    resp.raise_for_status()
+    rows = resp.json()
+    return rows[0] if rows else {}
+
+
 _SERPAPI_META_KEYS = {"search_metadata", "search_parameters", "serpapi_pagination"}
 
 
@@ -213,12 +228,11 @@ def _ttl_cutoff(ttl_days: int) -> str:
     return cutoff.isoformat()
 
 
-def cache_lookup_search(config, search_phrase, country, pages, ttl_days) -> dict | None:
-    """Return the most recent fresh search cache row, or None."""
+def cache_lookup_search(config, search_phrase, country, ttl_days) -> dict | None:
+    """Return the most recent fresh search cache row, or None. No pages filter — top-up handles gaps."""
     rows = _supabase_get(config, "serpapi_walmart_search_cache", {
         "search_phrase": f"eq.{search_phrase}",
         "country": f"eq.{country}",
-        "pages": f"eq.{pages}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
         "order": "fetched_at.desc",
         "limit": 1,
@@ -422,11 +436,12 @@ def main():
 
         # Step 1: check search cache
         search_row = cache_lookup_search(
-            config, normalized, args.country, args.pages, args.ttl_days
+            config, normalized, args.country, args.ttl_days
         )
         if search_row:
             search_cache_id = search_row["id"]
             organic = json.loads(search_row.get("organic_results") or "[]")
+            cached_pages = search_row.get("pages", 1)
         else:
             print(f"Fetching search results for: {args.search_phrase}")
             all_organic = []
@@ -455,6 +470,43 @@ def main():
             )
             items_stored += 1
             organic = all_organic
+            cached_pages = args.pages
+
+        # Top-up: fetch additional pages if cached results fall short of max_items
+        if len(organic) < args.max_items:
+            seen_ids = {str(item.get("us_item_id")) for item in organic if item.get("us_item_id")}
+            next_page = cached_pages + 1
+            extra_pages = 0
+            while len(organic) < args.max_items and extra_pages < 10:
+                try:
+                    page_data = search_walmart(
+                        serpapi_key, args.search_phrase,
+                        country=args.country, page=next_page
+                    )
+                    items_fetched += 1
+                    new_results = page_data.get("organic_results", [])
+                    if not new_results:
+                        break
+                    added = 0
+                    for item in new_results:
+                        item_id = str(item.get("us_item_id")) if item.get("us_item_id") else None
+                        if item_id and item_id not in seen_ids:
+                            organic.append(item)
+                            seen_ids.add(item_id)
+                            added += 1
+                    if added == 0:
+                        break
+                    extra_pages += 1
+                    next_page += 1
+                except Exception as e:
+                    print(f"WARNING: Top-up page {next_page} failed: {e}")
+                    break
+            if extra_pages > 0:
+                _supabase_patch(config, "serpapi_walmart_search_cache", search_cache_id, {
+                    "organic_results": json.dumps(organic),
+                    "result_count": len(organic),
+                    "pages": cached_pages + extra_pages,
+                })
 
         # Step 2: for each top item, check product cache or fetch
         top_items = extract_top_items(organic, args.max_items)

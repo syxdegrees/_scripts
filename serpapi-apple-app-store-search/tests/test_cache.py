@@ -117,7 +117,7 @@ def test_cache_lookup_search_hit(monkeypatch):
         lambda config, table, params: [fake_row]
     )
     config = {"url": "https://x.supabase.co", "key": "k"}
-    result = cache_lookup_search(config, "fitness-tracker", "us", pages=1, ttl_days=30)
+    result = cache_lookup_search(config, "fitness-tracker", "us", ttl_days=30)
     assert result == fake_row
 
 
@@ -127,7 +127,7 @@ def test_cache_lookup_search_miss(monkeypatch):
         lambda config, table, params: []
     )
     config = {"url": "https://x.supabase.co", "key": "k"}
-    result = cache_lookup_search(config, "fitness-tracker", "us", pages=1, ttl_days=30)
+    result = cache_lookup_search(config, "fitness-tracker", "us", ttl_days=30)
     assert result is None
 
 
@@ -139,11 +139,11 @@ def test_cache_lookup_search_passes_correct_params(monkeypatch):
         return []
     monkeypatch.setattr("serpapi_apple_app_store_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
-    cache_lookup_search(config, "workout-app", "gb", pages=2, ttl_days=30)
+    cache_lookup_search(config, "workout-app", "gb", ttl_days=30)
     assert captured["table"] == "serpapi_apple_app_store_search_cache"
     assert captured["params"]["search_phrase"] == "eq.workout-app"
     assert captured["params"]["country"] == "eq.gb"
-    assert captured["params"]["pages"] == "eq.2"
+    assert "pages" not in captured["params"]
     assert "fetched_at" in captured["params"]
 
 
