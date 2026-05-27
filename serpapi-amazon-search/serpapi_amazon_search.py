@@ -292,8 +292,8 @@ def main():
                         help="Search result pages to fetch (default: 1)")
     parser.add_argument("--max_asins", type=int, default=10,
                         help="Max products to fetch details for (default: 10)")
-    parser.add_argument("--ttl_days", type=int, default=7,
-                        help="Cache freshness in days (default: 7)")
+    parser.add_argument("--ttl_days", type=int, default=30,
+                        help="Cache freshness in days (default: 30)")
     parser.add_argument("--run_id", default=None,
                         help="Optional run UUID passed through to STATS line")
     args = parser.parse_args()

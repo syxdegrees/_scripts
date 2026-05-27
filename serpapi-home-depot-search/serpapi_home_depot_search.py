@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Walmart SerpAPI cache-first fetcher.
+Home Depot SerpAPI cache-first fetcher.
 
 Checks Supabase for fresh data before calling the API.
 Stores raw API sections as JSONB columns in intermediary tables.
 Emits JSON lines + STATS to stdout for the calling skill.
 
 Usage:
-  python serpapi_walmart_search.py --search_phrase "protein powder" --max_items 10
-  python serpapi_walmart_search.py --us_item_id 505002150
+  python serpapi_home_depot_search.py --search_phrase "circular saw" --max_items 10
+  python serpapi_home_depot_search.py --item_id 206123971
 """
 
 import argparse
@@ -23,23 +23,34 @@ from pathlib import Path
 SERPAPI_URL = "https://serpapi.com/search"
 
 VALID_DOMAINS = {
-    "walmart.com",
-    "walmart.com.mx",
+    "homedepot.com",
+    "homedepot.ca",
 }
 
-# Columns in serpapi_walmart_search_cache that hold API section data (nullable JSONB).
+# Maps user-facing domain strings to the 'country' code the SerpAPI search engine expects.
+_DOMAIN_TO_COUNTRY = {
+    "homedepot.com": "us",
+    "homedepot.ca": "ca",
+}
+
+# Columns in serpapi_home_depot_search_cache that hold API section data (nullable JSONB).
 SEARCH_SECTION_COLS = {
     "search_information",
-    "organic_results",
+    "products",
+    "taxonomy",
+    "related_searches",
+    "ads",
 }
 
-# Columns in serpapi_walmart_product_cache that hold API section data (nullable JSONB).
+# Columns in serpapi_home_depot_product_cache that hold API section data (nullable JSONB).
 PRODUCT_SECTION_COLS = {
-    "product_result",
-    "reviews_results",
+    "product_results",
+    "breadcrumbs",
+    "more_from_brand",
+    "related_products",
 }
 
-# JSONB columns in serpapi_walmart_reviews_cache.
+# JSONB columns in serpapi_home_depot_reviews_cache.
 REVIEWS_JSONB_COLS = {
     "product",
     "ratings",
@@ -48,7 +59,7 @@ REVIEWS_JSONB_COLS = {
     "reviews",
 }
 
-# Scalar columns in serpapi_walmart_reviews_cache (stored natively, not as JSON strings).
+# Scalar columns in serpapi_home_depot_reviews_cache (stored natively, not as JSON strings).
 REVIEWS_SCALAR_COLS = {
     "overall_rating",
     "total_count",
@@ -84,38 +95,36 @@ def serpapi_get(api_key, params):
     return resp.json()
 
 
-def search_walmart(api_key, phrase, country="walmart.com", page=1):
+def search_home_depot(api_key, phrase, domain="homedepot.com", page=1):
     return serpapi_get(api_key, {
-        "engine": "walmart",
-        "query": phrase,
-        "walmart_domain": country,
+        "engine": "home_depot",
+        "q": phrase,
+        "country": _DOMAIN_TO_COUNTRY.get(domain, "us"),
         "page": page,
     })
 
 
-def fetch_product(api_key, us_item_id, country="walmart.com"):
+def fetch_product(api_key, item_id):
     return serpapi_get(api_key, {
-        "engine": "walmart_product",
-        "product_id": us_item_id,
-        "walmart_domain": country,
+        "engine": "home_depot_product",
+        "product_id": item_id,
     })
 
 
-def fetch_reviews(api_key, us_item_id, country="walmart.com", page=1):
+def fetch_reviews(api_key, item_id, page=1):
     return serpapi_get(api_key, {
-        "engine": "walmart_product_reviews",
-        "product_id": us_item_id,
-        "walmart_domain": country,
+        "engine": "home_depot_product_reviews",
+        "product_id": item_id,
         "page": page,
     })
 
 
-def fetch_reviews_paginated(api_key, us_item_id, country, review_pages):
+def fetch_reviews_paginated(api_key, item_id, review_pages):
     """Fetch review_pages pages and merge reviews arrays into one combined response."""
     combined = {}
     all_reviews = []
     for page_num in range(1, review_pages + 1):
-        page_data = fetch_reviews(api_key, us_item_id, country=country, page=page_num)
+        page_data = fetch_reviews(api_key, item_id, page=page_num)
         if page_num == 1:
             combined = page_data
         all_reviews.extend(page_data.get("reviews", []))
@@ -191,17 +200,17 @@ def strip_serpapi_metadata(response: dict) -> dict:
     return {k: v for k, v in response.items() if k not in _SERPAPI_META_KEYS}
 
 
-def extract_top_items(organic_results: list, max_items: int) -> list:
+def extract_top_items(products: list, max_items: int) -> list:
     """
-    Return list of (position, us_item_id) tuples from organic_results.
-    position = original index in organic_results (0-based).
-    Skips items without a 'us_item_id' key. Returns at most max_items items.
+    Return list of (position, product_id) tuples from products.
+    position = original index in products (0-based).
+    Skips items without a 'product_id' key. Returns at most max_items items.
     """
     result = []
-    for i, item in enumerate(organic_results):
-        us_item_id = item.get("us_item_id")
-        if us_item_id:
-            result.append((i, str(us_item_id)))
+    for i, item in enumerate(products):
+        product_id = item.get("product_id")
+        if product_id:
+            result.append((i, str(product_id)))
         if len(result) == max_items:
             break
     return result
@@ -213,11 +222,11 @@ def _ttl_cutoff(ttl_days: int) -> str:
     return cutoff.isoformat()
 
 
-def cache_lookup_search(config, search_phrase, country, pages, ttl_days) -> dict | None:
+def cache_lookup_search(config, search_phrase, domain, pages, ttl_days) -> dict | None:
     """Return the most recent fresh search cache row, or None."""
-    rows = _supabase_get(config, "serpapi_walmart_search_cache", {
+    rows = _supabase_get(config, "serpapi_home_depot_search_cache", {
         "search_phrase": f"eq.{search_phrase}",
-        "country": f"eq.{country}",
+        "domain": f"eq.{domain}",
         "pages": f"eq.{pages}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
         "order": "fetched_at.desc",
@@ -226,11 +235,11 @@ def cache_lookup_search(config, search_phrase, country, pages, ttl_days) -> dict
     return rows[0] if rows else None
 
 
-def cache_lookup_product(config, us_item_id, country, ttl_days) -> dict | None:
+def cache_lookup_product(config, item_id, domain, ttl_days) -> dict | None:
     """Return the most recent fresh product cache row for this item, or None."""
-    rows = _supabase_get(config, "serpapi_walmart_product_cache", {
-        "us_item_id": f"eq.{us_item_id}",
-        "country": f"eq.{country}",
+    rows = _supabase_get(config, "serpapi_home_depot_product_cache", {
+        "item_id": f"eq.{item_id}",
+        "domain": f"eq.{domain}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
         "order": "fetched_at.desc",
         "limit": 1,
@@ -238,11 +247,11 @@ def cache_lookup_product(config, us_item_id, country, ttl_days) -> dict | None:
     return rows[0] if rows else None
 
 
-def cache_lookup_reviews(config, us_item_id, country, review_pages, ttl_days) -> dict | None:
+def cache_lookup_reviews(config, item_id, domain, review_pages, ttl_days) -> dict | None:
     """Return the most recent fresh reviews cache row for this item, or None."""
-    rows = _supabase_get(config, "serpapi_walmart_reviews_cache", {
-        "us_item_id": f"eq.{us_item_id}",
-        "country": f"eq.{country}",
+    rows = _supabase_get(config, "serpapi_home_depot_reviews_cache", {
+        "item_id": f"eq.{item_id}",
+        "domain": f"eq.{domain}",
         "review_pages": f"eq.{review_pages}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
         "order": "fetched_at.desc",
@@ -251,43 +260,43 @@ def cache_lookup_reviews(config, us_item_id, country, review_pages, ttl_days) ->
     return rows[0] if rows else None
 
 
-def store_search_result(config, search_phrase, country, pages, api_response) -> str:
+def store_search_result(config, search_phrase, domain, pages, api_response) -> str:
     """Strip SerpAPI metadata, store search response. Returns the UUID of the inserted row."""
     cleaned = strip_serpapi_metadata(api_response)
-    organic = cleaned.get("organic_results") or []
+    products = cleaned.get("products") or []
     row = {
         "search_phrase": search_phrase,
-        "country": country,
+        "domain": domain,
         "pages": pages,
-        "result_count": len(organic),
+        "result_count": len(products),
     }
     for col in SEARCH_SECTION_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_walmart_search_cache", row)
+    inserted = _supabase_post(config, "serpapi_home_depot_search_cache", row)
     return inserted["id"]
 
 
-def store_product_result(config, us_item_id, country, api_response) -> str:
+def store_product_result(config, item_id, domain, api_response) -> str:
     """Strip SerpAPI metadata, store product response. Returns the UUID of the inserted row."""
     cleaned = strip_serpapi_metadata(api_response)
     row = {
-        "us_item_id": us_item_id,
-        "country": country,
+        "item_id": item_id,
+        "domain": domain,
     }
     for col in PRODUCT_SECTION_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_walmart_product_cache", row)
+    inserted = _supabase_post(config, "serpapi_home_depot_product_cache", row)
     return inserted["id"]
 
 
-def store_reviews_result(config, us_item_id, country, review_pages, api_response) -> str:
+def store_reviews_result(config, item_id, domain, review_pages, api_response) -> str:
     """Strip SerpAPI metadata, store reviews response. Returns the UUID of the inserted row."""
     cleaned = strip_serpapi_metadata(api_response)
     row = {
-        "us_item_id": us_item_id,
-        "country": country,
+        "item_id": item_id,
+        "domain": domain,
         "review_pages": review_pages,
     }
     for col in REVIEWS_SCALAR_COLS:
@@ -296,13 +305,13 @@ def store_reviews_result(config, us_item_id, country, review_pages, api_response
     for col in REVIEWS_JSONB_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_walmart_reviews_cache", row)
+    inserted = _supabase_post(config, "serpapi_home_depot_reviews_cache", row)
     return inserted["id"]
 
 
 def store_search_product_link(config, search_cache_id, product_cache_id, position):
-    """Insert a row into serpapi_walmart_search_product_link."""
-    _supabase_post(config, "serpapi_walmart_search_product_link", {
+    """Insert a row into serpapi_home_depot_search_product_link."""
+    _supabase_post(config, "serpapi_home_depot_search_product_link", {
         "search_cache_id": search_cache_id,
         "product_cache_id": product_cache_id,
         "position": position,
@@ -310,12 +319,12 @@ def store_search_product_link(config, search_cache_id, product_cache_id, positio
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Walmart SerpAPI cache-first fetcher")
+    parser = argparse.ArgumentParser(description="Home Depot SerpAPI cache-first fetcher")
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--search_phrase", help="Keyword to search on Walmart")
-    group.add_argument("--us_item_id", help="Walmart us_item_id for direct product/reviews lookup")
-    parser.add_argument("--country", default="walmart.com",
-                        help="Walmart domain (default: walmart.com)")
+    group.add_argument("--search_phrase", help="Keyword to search on Home Depot")
+    group.add_argument("--item_id", help="Home Depot item_id for direct product/reviews lookup")
+    parser.add_argument("--domain", default="homedepot.com",
+                        help="Home Depot domain (default: homedepot.com)")
     parser.add_argument("--pages", type=int, default=1,
                         help="Search result pages to fetch (default: 1)")
     parser.add_argument("--max_items", type=int, default=10,
@@ -328,8 +337,8 @@ def main():
                         help="Optional run UUID passed through to STATS line")
     args = parser.parse_args()
 
-    if args.country not in VALID_DOMAINS:
-        print(f"ERROR: Invalid country '{args.country}'. Must be one of: "
+    if args.domain not in VALID_DOMAINS:
+        print(f"ERROR: Invalid domain '{args.domain}'. Must be one of: "
               f"{', '.join(sorted(VALID_DOMAINS))}")
         sys.exit(1)
 
@@ -350,70 +359,70 @@ def main():
     reviews_cache_id = None
     product_cache_ids = []
 
-    if args.us_item_id:
-        # ── us_item_id mode: product API + reviews API ────────────────────────
-        us_item_id = str(args.us_item_id)
+    if args.item_id:
+        # ── item_id mode: product API + reviews API ───────────────────────────
+        item_id = str(args.item_id)
 
         # Product
-        prod_row = cache_lookup_product(config, us_item_id, args.country, args.ttl_days)
+        prod_row = cache_lookup_product(config, item_id, args.domain, args.ttl_days)
         if prod_row:
             product_cache_id = prod_row["id"]
             items_cached += 1
             print(json.dumps({
                 "status": "cached",
-                "us_item_id": us_item_id,
+                "item_id": item_id,
                 "type": "product",
                 "product_cache_id": product_cache_id,
             }))
         else:
             try:
-                response = fetch_product(serpapi_key, us_item_id, country=args.country)
+                response = fetch_product(serpapi_key, item_id)
                 items_fetched += 1
                 product_cache_id = store_product_result(
-                    config, us_item_id, args.country, response
+                    config, item_id, args.domain, response
                 )
                 items_stored += 1
                 print(json.dumps({
                     "status": "stored",
-                    "us_item_id": us_item_id,
+                    "item_id": item_id,
                     "type": "product",
                     "product_cache_id": product_cache_id,
                 }))
             except Exception as e:
-                print(f"ERROR: Failed to fetch/store product for {us_item_id}: {e}")
+                print(f"ERROR: Failed to fetch/store product for {item_id}: {e}")
                 sys.exit(1)
 
         # Reviews
         rev_row = cache_lookup_reviews(
-            config, us_item_id, args.country, args.review_pages, args.ttl_days
+            config, item_id, args.domain, args.review_pages, args.ttl_days
         )
         if rev_row:
             reviews_cache_id = rev_row["id"]
             items_cached += 1
             print(json.dumps({
                 "status": "cached",
-                "us_item_id": us_item_id,
+                "item_id": item_id,
                 "type": "reviews",
                 "reviews_cache_id": reviews_cache_id,
             }))
         else:
             try:
                 response = fetch_reviews_paginated(
-                    serpapi_key, us_item_id, args.country, args.review_pages
+                    serpapi_key, item_id, args.review_pages
                 )
                 items_fetched += args.review_pages
                 reviews_cache_id = store_reviews_result(
-                    config, us_item_id, args.country, args.review_pages, response
+                    config, item_id, args.domain, args.review_pages, response
                 )
                 items_stored += 1
                 print(json.dumps({
                     "status": "stored",
-                    "us_item_id": us_item_id,
+                    "item_id": item_id,
                     "type": "reviews",
                     "reviews_cache_id": reviews_cache_id,
                 }))
             except Exception as e:
-                print(f"ERROR: Failed to fetch/store reviews for {us_item_id}: {e}")
+                print(f"ERROR: Failed to fetch/store reviews for {item_id}: {e}")
                 sys.exit(1)
 
     else:
@@ -422,36 +431,36 @@ def main():
 
         # Step 1: check search cache
         search_row = cache_lookup_search(
-            config, normalized, args.country, args.pages, args.ttl_days
+            config, normalized, args.domain, args.pages, args.ttl_days
         )
         if search_row:
             search_cache_id = search_row["id"]
-            organic = json.loads(search_row.get("organic_results") or "[]")
+            organic = json.loads(search_row.get("products") or "[]")
         else:
             print(f"Fetching search results for: {args.search_phrase}")
             all_organic = []
             combined = {}
             for page_num in range(1, args.pages + 1):
                 try:
-                    page_data = search_walmart(
+                    page_data = search_home_depot(
                         serpapi_key, args.search_phrase,
-                        country=args.country, page=page_num
+                        domain=args.domain, page=page_num
                     )
                     items_fetched += 1
-                    all_organic.extend(page_data.get("organic_results", []))
+                    all_organic.extend(page_data.get("products", []))
                     if page_num == 1:
                         combined = page_data
                     else:
-                        combined.setdefault("organic_results", []).extend(
-                            page_data.get("organic_results", [])
+                        combined.setdefault("products", []).extend(
+                            page_data.get("products", [])
                         )
                 except Exception as e:
                     print(f"ERROR: Search API failed (page {page_num}): {e}")
                     sys.exit(1)
 
-            combined["organic_results"] = all_organic
+            combined["products"] = all_organic
             search_cache_id = store_search_result(
-                config, normalized, args.country, args.pages, combined
+                config, normalized, args.domain, args.pages, combined
             )
             items_stored += 1
             organic = all_organic
@@ -460,32 +469,32 @@ def main():
         top_items = extract_top_items(organic, args.max_items)
         print(f"Processing {len(top_items)} items...")
 
-        for position, us_item_id in top_items:
-            prod_row = cache_lookup_product(config, us_item_id, args.country, args.ttl_days)
+        for position, item_id in top_items:
+            prod_row = cache_lookup_product(config, item_id, args.domain, args.ttl_days)
             if prod_row:
                 product_cache_id = prod_row["id"]
                 items_cached += 1
                 print(json.dumps({
                     "status": "cached",
-                    "us_item_id": us_item_id,
+                    "item_id": item_id,
                     "product_cache_id": product_cache_id,
                 }))
             else:
                 try:
-                    response = fetch_product(serpapi_key, us_item_id, country=args.country)
+                    response = fetch_product(serpapi_key, item_id)
                     items_fetched += 1
                     product_cache_id = store_product_result(
-                        config, us_item_id, args.country, response
+                        config, item_id, args.domain, response
                     )
                     items_stored += 1
                     print(json.dumps({
                         "status": "stored",
-                        "us_item_id": us_item_id,
+                        "item_id": item_id,
                         "product_cache_id": product_cache_id,
                     }))
                     time.sleep(0.3)
                 except Exception as e:
-                    print(f"WARNING: Failed to fetch/store item {us_item_id}: {e}")
+                    print(f"WARNING: Failed to fetch/store item {item_id}: {e}")
                     continue
 
             product_cache_ids.append(product_cache_id)
@@ -496,9 +505,9 @@ def main():
             except Exception:
                 pass  # link may already exist if item was cached from a prior search
 
-    if args.us_item_id:
+    if args.item_id:
         print(
-            f"STATS:mode=us_item_id,"
+            f"STATS:mode=item_id,"
             f"product_cache_id={product_cache_id or 'null'},"
             f"reviews_cache_id={reviews_cache_id or 'null'},"
             f"items_fetched={items_fetched},"

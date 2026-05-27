@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
-Full API test: dumps raw SerpAPI Walmart search + product reviews responses to dated CSVs.
-No mapping, no Supabase, no field filtering.
+Refresh API Reference: calls the live SerpAPI Walmart endpoints and checks
+field coverage against serpapi-walmart-api-reference.md.
 
-Output:
-  tests/YYYY-MM-DD_full-api-test_search_{term}.csv
-  tests/YYYY-MM-DD_full-api-test_reviews_{item_id}.csv
+APIs tested:
+  engine=walmart               (search)
+  engine=walmart_product       (product detail)
+  engine=walmart_product_reviews (reviews)
+
+Usage:
+  python tests/serpapi_walmart_test.py \
+    --search_phrase "protein powder" \
+    --refresh_reference path/to/serpapi-walmart-api-reference.md
 """
 
 import argparse
@@ -116,7 +122,12 @@ def collect_section_keys(response: dict) -> dict:
     return result
 
 
-def check_against_reference(search_response: dict, reviews_response: dict, reference_path: str) -> None:
+def check_against_reference(
+    search_response: dict,
+    product_response: dict,
+    reviews_response: dict,
+    reference_path: str,
+) -> None:
     ref_path = Path(reference_path)
     if not ref_path.exists():
         print(f"ERROR: Reference file not found: {reference_path}")
@@ -124,6 +135,7 @@ def check_against_reference(search_response: dict, reviews_response: dict, refer
     ref = ref_path.read_text(encoding="utf-8")
 
     search_keys = collect_section_keys(search_response)
+    product_keys = collect_section_keys(product_response)
     reviews_keys = collect_section_keys(reviews_response)
 
     any_issues = False
@@ -132,7 +144,8 @@ def check_against_reference(search_response: dict, reviews_response: dict, refer
     print("=" * 60)
 
     for api_label, sections in [
-        ("Search API  (engine=walmart)", search_keys),
+        ("Search API  (engine=walmart)",                search_keys),
+        ("Product API (engine=walmart_product)",        product_keys),
         ("Reviews API (engine=walmart_product_reviews)", reviews_keys),
     ]:
         print(f"\n{api_label}")
@@ -173,13 +186,14 @@ def check_against_reference(search_response: dict, reviews_response: dict, refer
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Full API test — dumps raw SerpAPI Walmart response to dated CSVs, or checks field coverage against a reference file"
+        description="Refresh API reference: checks live Walmart SerpAPI responses against the reference file"
     )
     parser.add_argument("--search_phrase", required=True, help="Search term to test with")
     parser.add_argument(
         "--refresh_reference",
         metavar="PATH",
-        help="Path to serpapi-walmart-api-reference.md. When set, checks live API keys against the reference instead of writing CSVs.",
+        required=True,
+        help="Path to serpapi-walmart-api-reference.md",
     )
     args = parser.parse_args()
 
@@ -188,8 +202,6 @@ def main():
     if not api_key:
         print("ERROR: SERPAPI_API_KEY not found in environment or .env")
         sys.exit(1)
-
-    clean_term = clean_search_term(args.search_phrase)
 
     # Search API
     print(f"Calling Walmart search API: {args.search_phrase}")
@@ -203,16 +215,22 @@ def main():
     # Extract first us_item_id
     organic = search_response.get("organic_results", [])
     if not organic:
-        print("WARNING: No organic_results — skipping reviews API call.")
-        if args.refresh_reference:
-            check_against_reference(search_response, {}, args.refresh_reference)
+        print("WARNING: No organic_results — skipping product and reviews API calls.")
+        check_against_reference(search_response, {}, {}, args.refresh_reference)
         return
     item_id = organic[0].get("us_item_id")
     if not item_id:
-        print("WARNING: First organic result has no us_item_id — skipping reviews API call.")
-        if args.refresh_reference:
-            check_against_reference(search_response, {}, args.refresh_reference)
+        print("WARNING: First organic result has no us_item_id — skipping product and reviews API calls.")
+        check_against_reference(search_response, {}, {}, args.refresh_reference)
         return
+
+    # Product API
+    print(f"Calling Walmart product API: {item_id}")
+    product_response = serpapi_get(api_key, {
+        "engine": "walmart_product",
+        "product_id": item_id,
+        "walmart_domain": "walmart.com",
+    })
 
     # Reviews API
     print(f"Calling Walmart reviews API: {item_id}")
@@ -222,30 +240,7 @@ def main():
         "walmart_domain": "walmart.com",
     })
 
-    if args.refresh_reference:
-        check_against_reference(search_response, reviews_response, args.refresh_reference)
-        return
-
-    search_rows = flatten_response(search_response)
-    search_filename = build_filename("search", clean_term)
-    search_path = TESTS_DIR / search_filename
-    write_csv(search_rows, search_path)
-
-    reviews_rows = flatten_response(reviews_response, extra_cols={"us_item_id": item_id})
-    reviews_filename = build_filename("reviews", str(item_id))
-    reviews_path = TESTS_DIR / reviews_filename
-    write_csv(reviews_rows, reviews_path)
-
-    print(f"""
-Full API Test complete.
-────────────────────────────────────────
-  Search term   : {args.search_phrase}
-  Item ID tested: {item_id}
-  Search rows   : {len(search_rows)}  →  {search_path}
-  Reviews rows  : {len(reviews_rows)}  →  {reviews_path}
-────────────────────────────────────────
-Review the CSV files to explore the full API surface.
-""")
+    check_against_reference(search_response, product_response, reviews_response, args.refresh_reference)
 
 
 if __name__ == "__main__":
