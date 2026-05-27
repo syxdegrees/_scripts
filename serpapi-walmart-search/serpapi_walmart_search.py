@@ -27,19 +27,19 @@ VALID_DOMAINS = {
     "walmart.com.mx",
 }
 
-# Columns in serpapi_walmart_search_cache that hold API section data (nullable JSONB).
+# Columns in serpapi_walmart_search that hold API section data (nullable JSONB).
 SEARCH_SECTION_COLS = {
     "search_information",
     "organic_results",
 }
 
-# Columns in serpapi_walmart_product_cache that hold API section data (nullable JSONB).
+# Columns in serpapi_walmart_product that hold API section data (nullable JSONB).
 PRODUCT_SECTION_COLS = {
     "product_result",
     "reviews_results",
 }
 
-# JSONB columns in serpapi_walmart_reviews_cache.
+# JSONB columns in serpapi_walmart_reviews.
 REVIEWS_JSONB_COLS = {
     "product",
     "ratings",
@@ -48,7 +48,7 @@ REVIEWS_JSONB_COLS = {
     "reviews",
 }
 
-# Scalar columns in serpapi_walmart_reviews_cache (stored natively, not as JSON strings).
+# Scalar columns in serpapi_walmart_reviews (stored natively, not as JSON strings).
 REVIEWS_SCALAR_COLS = {
     "overall_rating",
     "total_count",
@@ -230,7 +230,7 @@ def _ttl_cutoff(ttl_days: int) -> str:
 
 def cache_lookup_search(config, search_phrase, country, ttl_days) -> dict | None:
     """Return the most recent fresh search cache row, or None. No pages filter — top-up handles gaps."""
-    rows = _supabase_get(config, "serpapi_walmart_search_cache", {
+    rows = _supabase_get(config, "serpapi_walmart_search", {
         "search_phrase": f"eq.{search_phrase}",
         "country": f"eq.{country}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
@@ -242,7 +242,7 @@ def cache_lookup_search(config, search_phrase, country, ttl_days) -> dict | None
 
 def cache_lookup_product(config, us_item_id, country, ttl_days) -> dict | None:
     """Return the most recent fresh product cache row for this item, or None."""
-    rows = _supabase_get(config, "serpapi_walmart_product_cache", {
+    rows = _supabase_get(config, "serpapi_walmart_product", {
         "us_item_id": f"eq.{us_item_id}",
         "country": f"eq.{country}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
@@ -254,7 +254,7 @@ def cache_lookup_product(config, us_item_id, country, ttl_days) -> dict | None:
 
 def cache_lookup_reviews(config, us_item_id, country, review_pages, ttl_days) -> dict | None:
     """Return the most recent fresh reviews cache row for this item, or None."""
-    rows = _supabase_get(config, "serpapi_walmart_reviews_cache", {
+    rows = _supabase_get(config, "serpapi_walmart_reviews", {
         "us_item_id": f"eq.{us_item_id}",
         "country": f"eq.{country}",
         "review_pages": f"eq.{review_pages}",
@@ -278,7 +278,7 @@ def store_search_result(config, search_phrase, country, pages, api_response) -> 
     for col in SEARCH_SECTION_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_walmart_search_cache", row)
+    inserted = _supabase_post(config, "serpapi_walmart_search", row)
     return inserted["id"]
 
 
@@ -292,7 +292,7 @@ def store_product_result(config, us_item_id, country, api_response) -> str:
     for col in PRODUCT_SECTION_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_walmart_product_cache", row)
+    inserted = _supabase_post(config, "serpapi_walmart_product", row)
     return inserted["id"]
 
 
@@ -310,7 +310,7 @@ def store_reviews_result(config, us_item_id, country, review_pages, api_response
     for col in REVIEWS_JSONB_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_walmart_reviews_cache", row)
+    inserted = _supabase_post(config, "serpapi_walmart_reviews", row)
     return inserted["id"]
 
 
@@ -502,7 +502,7 @@ def main():
                     print(f"WARNING: Top-up page {next_page} failed: {e}")
                     break
             if extra_pages > 0:
-                _supabase_patch(config, "serpapi_walmart_search_cache", search_cache_id, {
+                _supabase_patch(config, "serpapi_walmart_search", search_cache_id, {
                     "organic_results": json.dumps(organic),
                     "result_count": len(organic),
                     "pages": cached_pages + extra_pages,

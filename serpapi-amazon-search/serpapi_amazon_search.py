@@ -28,7 +28,7 @@ VALID_DOMAINS = {
     "amazon.in", "amazon.com.au", "amazon.com.mx",
 }
 
-# Columns in serpapi_amazon_search_cache that hold API section data (nullable JSONB).
+# Columns in serpapi_amazon_search that hold API section data (nullable JSONB).
 # Keys match both the SerpAPI response keys and the Supabase column names.
 SEARCH_SECTION_COLS = {
     "search_information",
@@ -42,7 +42,7 @@ SEARCH_SECTION_COLS = {
     "filters",
 }
 
-# Columns in serpapi_amazon_product_cache that hold API section data (nullable JSONB).
+# Columns in serpapi_amazon_product that hold API section data (nullable JSONB).
 PRODUCT_SECTION_COLS = {
     "product_results",
     "purchase_options",
@@ -220,7 +220,7 @@ def cache_lookup_search(config, search_phrase, country, ttl_days) -> dict | None
     Return the most recent fresh amazon_search_cache row, or None.
     Fresh = fetched_at within ttl_days. No pages filter — top-up handles gaps.
     """
-    rows = _supabase_get(config, "serpapi_amazon_search_cache", {
+    rows = _supabase_get(config, "serpapi_amazon_search", {
         "search_phrase": f"eq.{search_phrase}",
         "country": f"eq.{country}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
@@ -234,7 +234,7 @@ def cache_lookup_product(config, asin, country, ttl_days) -> dict | None:
     """
     Return the most recent fresh amazon_product_cache row for this ASIN, or None.
     """
-    rows = _supabase_get(config, "serpapi_amazon_product_cache", {
+    rows = _supabase_get(config, "serpapi_amazon_product", {
         "asin": f"eq.{asin}",
         "country": f"eq.{country}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
@@ -260,7 +260,7 @@ def store_search_result(config, search_phrase, country, pages, api_response) -> 
     for col in SEARCH_SECTION_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_amazon_search_cache", row)
+    inserted = _supabase_post(config, "serpapi_amazon_search", row)
     return inserted["id"]
 
 
@@ -277,7 +277,7 @@ def store_product_result(config, asin, country, api_response) -> str:
     for col in PRODUCT_SECTION_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_amazon_product_cache", row)
+    inserted = _supabase_post(config, "serpapi_amazon_product", row)
     return inserted["id"]
 
 
@@ -434,7 +434,7 @@ def main():
                     print(f"WARNING: Top-up page {next_page} failed: {e}")
                     break
             if extra_pages > 0:
-                _supabase_patch(config, "serpapi_amazon_search_cache", search_cache_id, {
+                _supabase_patch(config, "serpapi_amazon_search", search_cache_id, {
                     "organic_results": json.dumps(organic),
                     "result_count": len(organic),
                     "pages": cached_pages + extra_pages,

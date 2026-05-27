@@ -22,13 +22,13 @@ from pathlib import Path
 
 SERPAPI_URL = "https://serpapi.com/search"
 
-# Columns in serpapi_apple_app_store_search_cache that hold API section data (nullable JSONB).
+# Columns in serpapi_apple_app_store_search that hold API section data (nullable JSONB).
 SEARCH_SECTION_COLS = {
     "search_information",
     "organic_results",
 }
 
-# JSONB columns in serpapi_apple_app_store_reviews_cache.
+# JSONB columns in serpapi_apple_app_store_reviews.
 REVIEWS_JSONB_COLS = {
     "search_information",
     "reviews",
@@ -217,7 +217,7 @@ def _ttl_cutoff(ttl_days: int) -> str:
 
 def cache_lookup_search(config, search_phrase, country, ttl_days) -> dict | None:
     """Return the most recent fresh search cache row, or None. No pages filter — top-up handles gaps."""
-    rows = _supabase_get(config, "serpapi_apple_app_store_search_cache", {
+    rows = _supabase_get(config, "serpapi_apple_app_store_search", {
         "search_phrase": f"eq.{search_phrase}",
         "country": f"eq.{country}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
@@ -229,7 +229,7 @@ def cache_lookup_search(config, search_phrase, country, ttl_days) -> dict | None
 
 def cache_lookup_product(config, app_id, country, ttl_days) -> dict | None:
     """Return the most recent fresh product cache row for this app, or None."""
-    rows = _supabase_get(config, "serpapi_apple_app_store_product_cache", {
+    rows = _supabase_get(config, "serpapi_apple_app_store_product", {
         "app_id": f"eq.{app_id}",
         "country": f"eq.{country}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
@@ -241,7 +241,7 @@ def cache_lookup_product(config, app_id, country, ttl_days) -> dict | None:
 
 def cache_lookup_reviews(config, app_id, country, review_pages, ttl_days) -> dict | None:
     """Return the most recent fresh reviews cache row for this app, or None."""
-    rows = _supabase_get(config, "serpapi_apple_app_store_reviews_cache", {
+    rows = _supabase_get(config, "serpapi_apple_app_store_reviews", {
         "app_id": f"eq.{app_id}",
         "country": f"eq.{country}",
         "review_pages": f"eq.{review_pages}",
@@ -265,7 +265,7 @@ def store_search_result(config, search_phrase, country, pages, api_response) -> 
     for col in SEARCH_SECTION_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_apple_app_store_search_cache", row)
+    inserted = _supabase_post(config, "serpapi_apple_app_store_search", row)
     return inserted["id"]
 
 
@@ -277,7 +277,7 @@ def store_product_result(config, app_id, country, api_response) -> str:
         "country": country,
         "product_results": json.dumps(cleaned),
     }
-    inserted = _supabase_post(config, "serpapi_apple_app_store_product_cache", row)
+    inserted = _supabase_post(config, "serpapi_apple_app_store_product", row)
     return inserted["id"]
 
 
@@ -292,7 +292,7 @@ def store_reviews_result(config, app_id, country, review_pages, api_response) ->
     for col in REVIEWS_JSONB_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_apple_app_store_reviews_cache", row)
+    inserted = _supabase_post(config, "serpapi_apple_app_store_reviews", row)
     return inserted["id"]
 
 
@@ -479,7 +479,7 @@ def main():
                     print(f"WARNING: Top-up page {next_page} failed: {e}")
                     break
             if extra_pages > 0:
-                _supabase_patch(config, "serpapi_apple_app_store_search_cache", search_cache_id, {
+                _supabase_patch(config, "serpapi_apple_app_store_search", search_cache_id, {
                     "organic_results": json.dumps(organic),
                     "result_count": len(organic),
                     "pages": cached_pages + extra_pages,

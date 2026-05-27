@@ -33,7 +33,7 @@ _DOMAIN_TO_COUNTRY = {
     "homedepot.ca": "ca",
 }
 
-# Columns in serpapi_home_depot_search_cache that hold API section data (nullable JSONB).
+# Columns in serpapi_home_depot_search that hold API section data (nullable JSONB).
 SEARCH_SECTION_COLS = {
     "search_information",
     "products",
@@ -42,7 +42,7 @@ SEARCH_SECTION_COLS = {
     "ads",
 }
 
-# Columns in serpapi_home_depot_product_cache that hold API section data (nullable JSONB).
+# Columns in serpapi_home_depot_product that hold API section data (nullable JSONB).
 PRODUCT_SECTION_COLS = {
     "product_results",
     "breadcrumbs",
@@ -50,7 +50,7 @@ PRODUCT_SECTION_COLS = {
     "related_products",
 }
 
-# JSONB columns in serpapi_home_depot_reviews_cache.
+# JSONB columns in serpapi_home_depot_reviews.
 REVIEWS_JSONB_COLS = {
     "product",
     "ratings",
@@ -59,7 +59,7 @@ REVIEWS_JSONB_COLS = {
     "reviews",
 }
 
-# Scalar columns in serpapi_home_depot_reviews_cache (stored natively, not as JSON strings).
+# Scalar columns in serpapi_home_depot_reviews (stored natively, not as JSON strings).
 # total_count maps FROM the API field "total_review" (Home Depot's name for it).
 REVIEWS_SCALAR_COLS = {
     "overall_rating",
@@ -245,7 +245,7 @@ def _ttl_cutoff(ttl_days: int) -> str:
 
 def cache_lookup_search(config, search_phrase, domain, ttl_days) -> dict | None:
     """Return the most recent fresh search cache row, or None. No pages filter — top-up handles gaps."""
-    rows = _supabase_get(config, "serpapi_home_depot_search_cache", {
+    rows = _supabase_get(config, "serpapi_home_depot_search", {
         "search_phrase": f"eq.{search_phrase}",
         "domain": f"eq.{domain}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
@@ -257,7 +257,7 @@ def cache_lookup_search(config, search_phrase, domain, ttl_days) -> dict | None:
 
 def cache_lookup_product(config, item_id, domain, ttl_days) -> dict | None:
     """Return the most recent fresh product cache row for this item, or None."""
-    rows = _supabase_get(config, "serpapi_home_depot_product_cache", {
+    rows = _supabase_get(config, "serpapi_home_depot_product", {
         "item_id": f"eq.{item_id}",
         "domain": f"eq.{domain}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
@@ -269,7 +269,7 @@ def cache_lookup_product(config, item_id, domain, ttl_days) -> dict | None:
 
 def cache_lookup_reviews(config, item_id, domain, review_pages, ttl_days) -> dict | None:
     """Return the most recent fresh reviews cache row for this item, or None."""
-    rows = _supabase_get(config, "serpapi_home_depot_reviews_cache", {
+    rows = _supabase_get(config, "serpapi_home_depot_reviews", {
         "item_id": f"eq.{item_id}",
         "domain": f"eq.{domain}",
         "review_pages": f"eq.{review_pages}",
@@ -293,7 +293,7 @@ def store_search_result(config, search_phrase, domain, pages, api_response) -> s
     for col in SEARCH_SECTION_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_home_depot_search_cache", row)
+    inserted = _supabase_post(config, "serpapi_home_depot_search", row)
     return inserted["id"]
 
 
@@ -307,7 +307,7 @@ def store_product_result(config, item_id, domain, api_response) -> str:
     for col in PRODUCT_SECTION_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_home_depot_product_cache", row)
+    inserted = _supabase_post(config, "serpapi_home_depot_product", row)
     return inserted["id"]
 
 
@@ -328,7 +328,7 @@ def store_reviews_result(config, item_id, domain, review_pages, api_response) ->
     for col in REVIEWS_JSONB_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "serpapi_home_depot_reviews_cache", row)
+    inserted = _supabase_post(config, "serpapi_home_depot_reviews", row)
     return inserted["id"]
 
 
@@ -520,7 +520,7 @@ def main():
                     print(f"WARNING: Top-up page {next_page} failed: {e}")
                     break
             if extra_pages > 0:
-                _supabase_patch(config, "serpapi_home_depot_search_cache", search_cache_id, {
+                _supabase_patch(config, "serpapi_home_depot_search", search_cache_id, {
                     "products": json.dumps(organic),
                     "result_count": len(organic),
                     "pages": cached_pages + extra_pages,

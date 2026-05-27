@@ -169,7 +169,7 @@ def extract_top_items(organic_results: list, max_items: int) -> list:
 
 
 def cache_lookup_search(config, search_phrase, store_type, gl, hl, ttl_days) -> dict | None:
-    rows = _supabase_get(config, "serpapi_google_play_search_cache", {
+    rows = _supabase_get(config, "serpapi_google_play_search", {
         "search_phrase": f"eq.{search_phrase}",
         "store_type": f"eq.{store_type}",
         "gl": f"eq.{gl}",
@@ -193,7 +193,7 @@ def cache_lookup_product(config, product_id, store_type, gl, hl, with_reviews, t
     }
     if with_reviews:
         params["with_reviews"] = "eq.true"
-    rows = _supabase_get(config, "serpapi_google_play_product_cache", params)
+    rows = _supabase_get(config, "serpapi_google_play_product", params)
     return rows[0] if rows else None
 
 
@@ -207,7 +207,7 @@ def store_search_result(config, search_phrase, store_type, gl, hl, api_response)
     }
     if "organic_results" in cleaned:
         row["organic_results"] = json.dumps(cleaned["organic_results"])
-    inserted = _supabase_post(config, "serpapi_google_play_search_cache", row)
+    inserted = _supabase_post(config, "serpapi_google_play_search", row)
     return inserted["id"]
 
 
@@ -224,7 +224,7 @@ def store_product_result(config, product_id, store_type, gl, hl, with_reviews, a
         row["product_results"] = json.dumps(cleaned["product_results"])
     if with_reviews and "reviews" in cleaned:
         row["reviews"] = json.dumps(cleaned["reviews"])
-    inserted = _supabase_post(config, "serpapi_google_play_product_cache", row)
+    inserted = _supabase_post(config, "serpapi_google_play_product", row)
     return inserted["id"]
 
 

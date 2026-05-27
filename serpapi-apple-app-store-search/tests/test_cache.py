@@ -140,7 +140,7 @@ def test_cache_lookup_search_passes_correct_params(monkeypatch):
     monkeypatch.setattr("serpapi_apple_app_store_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
     cache_lookup_search(config, "workout-app", "gb", ttl_days=30)
-    assert captured["table"] == "serpapi_apple_app_store_search_cache"
+    assert captured["table"] == "serpapi_apple_app_store_search"
     assert captured["params"]["search_phrase"] == "eq.workout-app"
     assert captured["params"]["country"] == "eq.gb"
     assert "pages" not in captured["params"]
@@ -179,7 +179,7 @@ def test_cache_lookup_product_passes_correct_params(monkeypatch):
     monkeypatch.setattr("serpapi_apple_app_store_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
     cache_lookup_product(config, "899247664", "us", ttl_days=30)
-    assert captured["table"] == "serpapi_apple_app_store_product_cache"
+    assert captured["table"] == "serpapi_apple_app_store_product"
     assert captured["params"]["app_id"] == "eq.899247664"
     assert captured["params"]["country"] == "eq.us"
     assert "fetched_at" in captured["params"]
@@ -217,7 +217,7 @@ def test_cache_lookup_reviews_passes_correct_params(monkeypatch):
     monkeypatch.setattr("serpapi_apple_app_store_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
     cache_lookup_reviews(config, "899247664", "us", review_pages=3, ttl_days=30)
-    assert captured["table"] == "serpapi_apple_app_store_reviews_cache"
+    assert captured["table"] == "serpapi_apple_app_store_reviews"
     assert captured["params"]["app_id"] == "eq.899247664"
     assert captured["params"]["country"] == "eq.us"
     assert captured["params"]["review_pages"] == "eq.3"

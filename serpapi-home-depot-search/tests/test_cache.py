@@ -144,7 +144,7 @@ def test_cache_lookup_search_passes_correct_params(monkeypatch):
     monkeypatch.setattr("serpapi_home_depot_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
     cache_lookup_search(config, "power-drill", "homedepot.ca", ttl_days=30)
-    assert captured["table"] == "serpapi_home_depot_search_cache"
+    assert captured["table"] == "serpapi_home_depot_search"
     assert captured["params"]["search_phrase"] == "eq.power-drill"
     assert captured["params"]["domain"] == "eq.homedepot.ca"
     assert "pages" not in captured["params"]
@@ -183,7 +183,7 @@ def test_cache_lookup_product_passes_correct_params(monkeypatch):
     monkeypatch.setattr("serpapi_home_depot_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
     cache_lookup_product(config, "206123971", "homedepot.com", ttl_days=30)
-    assert captured["table"] == "serpapi_home_depot_product_cache"
+    assert captured["table"] == "serpapi_home_depot_product"
     assert captured["params"]["item_id"] == "eq.206123971"
     assert captured["params"]["domain"] == "eq.homedepot.com"
     assert "fetched_at" in captured["params"]
@@ -221,7 +221,7 @@ def test_cache_lookup_reviews_passes_correct_params(monkeypatch):
     monkeypatch.setattr("serpapi_home_depot_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
     cache_lookup_reviews(config, "206123971", "homedepot.com", review_pages=3, ttl_days=30)
-    assert captured["table"] == "serpapi_home_depot_reviews_cache"
+    assert captured["table"] == "serpapi_home_depot_reviews"
     assert captured["params"]["item_id"] == "eq.206123971"
     assert captured["params"]["domain"] == "eq.homedepot.com"
     assert captured["params"]["review_pages"] == "eq.3"

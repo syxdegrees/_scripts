@@ -145,7 +145,7 @@ def test_cache_lookup_search_passes_correct_params(monkeypatch):
     monkeypatch.setattr("serpapi_amazon_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
     cache_lookup_search(config, "espresso machine", "amazon.co.uk", ttl_days=3)
-    assert captured["table"] == "serpapi_amazon_search_cache"
+    assert captured["table"] == "serpapi_amazon_search"
     assert captured["params"]["search_phrase"] == "eq.espresso machine"
     assert captured["params"]["country"] == "eq.amazon.co.uk"
     assert "pages" not in captured["params"]
@@ -184,7 +184,7 @@ def test_cache_lookup_product_passes_correct_params(monkeypatch):
     monkeypatch.setattr("serpapi_amazon_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
     cache_lookup_product(config, "B09XXXXX", "amazon.com", ttl_days=14)
-    assert captured["table"] == "serpapi_amazon_product_cache"
+    assert captured["table"] == "serpapi_amazon_product"
     assert captured["params"]["asin"] == "eq.B09XXXXX"
     assert captured["params"]["country"] == "eq.amazon.com"
     assert "fetched_at" in captured["params"]

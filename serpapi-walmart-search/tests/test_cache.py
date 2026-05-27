@@ -147,7 +147,7 @@ def test_cache_lookup_search_passes_correct_params(monkeypatch):
     monkeypatch.setattr("serpapi_walmart_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
     cache_lookup_search(config, "protein powder", "walmart.com.mx", ttl_days=3)
-    assert captured["table"] == "serpapi_walmart_search_cache"
+    assert captured["table"] == "serpapi_walmart_search"
     assert captured["params"]["search_phrase"] == "eq.protein powder"
     assert captured["params"]["country"] == "eq.walmart.com.mx"
     assert "pages" not in captured["params"]
@@ -186,7 +186,7 @@ def test_cache_lookup_product_passes_correct_params(monkeypatch):
     monkeypatch.setattr("serpapi_walmart_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
     cache_lookup_product(config, "505002150", "walmart.com", ttl_days=14)
-    assert captured["table"] == "serpapi_walmart_product_cache"
+    assert captured["table"] == "serpapi_walmart_product"
     assert captured["params"]["us_item_id"] == "eq.505002150"
     assert captured["params"]["country"] == "eq.walmart.com"
     assert "fetched_at" in captured["params"]
@@ -224,7 +224,7 @@ def test_cache_lookup_reviews_passes_correct_params(monkeypatch):
     monkeypatch.setattr("serpapi_walmart_search._supabase_get", fake_get)
     config = {"url": "https://x.supabase.co", "key": "k"}
     cache_lookup_reviews(config, "505002150", "walmart.com", review_pages=3, ttl_days=7)
-    assert captured["table"] == "serpapi_walmart_reviews_cache"
+    assert captured["table"] == "serpapi_walmart_reviews"
     assert captured["params"]["us_item_id"] == "eq.505002150"
     assert captured["params"]["country"] == "eq.walmart.com"
     assert captured["params"]["review_pages"] == "eq.3"
