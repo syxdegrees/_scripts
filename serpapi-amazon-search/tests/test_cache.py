@@ -89,7 +89,7 @@ def test_strip_serpapi_metadata_does_not_mutate_original():
 
 def test_extract_top_asins_returns_correct_count():
     organic = [{"asin": f"B{i:03d}", "title": f"Product {i}"} for i in range(20)]
-    result = extract_top_asins(organic, max_asins=10)
+    result = extract_top_asins(organic, max_items=10)
     assert len(result) == 10
     assert result[0] == (0, "B000")
     assert result[9] == (9, "B009")
@@ -97,20 +97,20 @@ def test_extract_top_asins_returns_correct_count():
 
 def test_extract_top_asins_fewer_available():
     organic = [{"asin": f"B{i:03d}"} for i in range(5)]
-    result = extract_top_asins(organic, max_asins=10)
+    result = extract_top_asins(organic, max_items=10)
     assert len(result) == 5
 
 
 def test_extract_top_asins_skips_missing_asin():
     organic = [{"title": "No ASIN"}, {"asin": "B001"}, {"asin": "B002"}]
-    result = extract_top_asins(organic, max_asins=10)
+    result = extract_top_asins(organic, max_items=10)
     assert len(result) == 2
     assert result[0] == (1, "B001")
     assert result[1] == (2, "B002")
 
 
 def test_extract_top_asins_empty_list():
-    assert extract_top_asins([], max_asins=10) == []
+    assert extract_top_asins([], max_items=10) == []
 
 
 # ── cache_lookup_search ───────────────────────────────────────────────────────

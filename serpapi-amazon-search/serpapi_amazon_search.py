@@ -7,7 +7,7 @@ Stores raw API sections as JSONB columns in intermediary tables.
 Emits JSON lines + STATS to stdout for the calling skill.
 
 Usage:
-  python serpapi_amazon_search.py --search_phrase "espresso machine" --max_asins 10
+  python serpapi_amazon_search.py --search_phrase "espresso machine" --max_items 10
   python serpapi_amazon_search.py --asin B09XXXXX
 """
 
@@ -178,18 +178,18 @@ def strip_serpapi_metadata(response: dict) -> dict:
     return {k: v for k, v in response.items() if k not in _SERPAPI_META_KEYS}
 
 
-def extract_top_asins(organic_results: list, max_asins: int) -> list:
+def extract_top_asins(organic_results: list, max_items: int) -> list:
     """
     Return list of (position, asin) tuples from organic_results.
     position = original index in organic_results (0-based).
-    Skips items without an 'asin' key. Returns at most max_asins items.
+    Skips items without an 'asin' key. Returns at most max_items items.
     """
     result = []
     for i, item in enumerate(organic_results):
         asin = item.get("asin")
         if asin:
             result.append((i, asin))
-        if len(result) == max_asins:
+        if len(result) == max_items:
             break
     return result
 
@@ -290,7 +290,7 @@ def main():
                         help="Amazon domain (default: amazon.com)")
     parser.add_argument("--pages", type=int, default=1,
                         help="Search result pages to fetch (default: 1)")
-    parser.add_argument("--max_asins", type=int, default=10,
+    parser.add_argument("--max_items", type=int, default=10,
                         help="Max products to fetch details for (default: 10)")
     parser.add_argument("--ttl_days", type=int, default=30,
                         help="Cache freshness in days (default: 30)")
@@ -389,7 +389,7 @@ def main():
             organic = all_organic
 
         # Step 2: for each top ASIN, check product cache or fetch
-        top_asins = extract_top_asins(organic, args.max_asins)
+        top_asins = extract_top_asins(organic, args.max_items)
         print(f"Processing {len(top_asins)} ASINs...")
 
         for position, asin in top_asins:
@@ -426,16 +426,26 @@ def main():
             except Exception:
                 pass  # link may already exist if ASIN was cached from a prior search
 
-    product_ids_csv = ",".join(product_cache_ids)
-    print(
-        f"STATS:mode={'asin' if args.asin else 'search_term'},"
-        f"search_cache_id={search_cache_id or 'null'},"
-        f"product_cache_ids={product_ids_csv},"
-        f"items_fetched={items_fetched},"
-        f"items_cached={items_cached},"
-        f"items_stored={items_stored},"
-        f"run_id={args.run_id or 'null'}"
-    )
+    if args.asin:
+        print(
+            f"STATS:mode=asin,"
+            f"product_cache_id={product_cache_ids[0] if product_cache_ids else 'null'},"
+            f"items_fetched={items_fetched},"
+            f"items_cached={items_cached},"
+            f"items_stored={items_stored},"
+            f"run_id={args.run_id or 'null'}"
+        )
+    else:
+        product_ids_csv = ",".join(product_cache_ids)
+        print(
+            f"STATS:mode=search_term,"
+            f"search_cache_id={search_cache_id or 'null'},"
+            f"product_cache_ids={product_ids_csv},"
+            f"items_fetched={items_fetched},"
+            f"items_cached={items_cached},"
+            f"items_stored={items_stored},"
+            f"run_id={args.run_id or 'null'}"
+        )
 
 
 if __name__ == "__main__":
