@@ -178,7 +178,7 @@ def strip_serpapi_metadata(response: dict) -> dict:
     return {k: v for k, v in response.items() if k not in _SERPAPI_META_KEYS}
 
 
-def extract_top_asins(organic_results: list, max_items: int) -> list:
+def extract_top_items(organic_results: list, max_items: int) -> list:
     """
     Return list of (position, asin) tuples from organic_results.
     position = original index in organic_results (0-based).
@@ -389,7 +389,7 @@ def main():
             organic = all_organic
 
         # Step 2: for each top ASIN, check product cache or fetch
-        top_asins = extract_top_asins(organic, args.max_items)
+        top_asins = extract_top_items(organic, args.max_items)
         print(f"Processing {len(top_asins)} ASINs...")
 
         for position, asin in top_asins:

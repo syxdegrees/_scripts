@@ -10,7 +10,7 @@ from serpapi_amazon_search import (
     _supabase_get,
     _supabase_post,
     strip_serpapi_metadata,
-    extract_top_asins,
+    extract_top_items,
     cache_lookup_search,
     cache_lookup_product,
     store_search_result,
@@ -85,32 +85,32 @@ def test_strip_serpapi_metadata_does_not_mutate_original():
     assert "search_metadata" in response
 
 
-# ── extract_top_asins ─────────────────────────────────────────────────────────
+# ── extract_top_items ─────────────────────────────────────────────────────────
 
-def test_extract_top_asins_returns_correct_count():
+def test_extract_top_items_returns_correct_count():
     organic = [{"asin": f"B{i:03d}", "title": f"Product {i}"} for i in range(20)]
-    result = extract_top_asins(organic, max_items=10)
+    result = extract_top_items(organic, max_items=10)
     assert len(result) == 10
     assert result[0] == (0, "B000")
     assert result[9] == (9, "B009")
 
 
-def test_extract_top_asins_fewer_available():
+def test_extract_top_items_fewer_available():
     organic = [{"asin": f"B{i:03d}"} for i in range(5)]
-    result = extract_top_asins(organic, max_items=10)
+    result = extract_top_items(organic, max_items=10)
     assert len(result) == 5
 
 
-def test_extract_top_asins_skips_missing_asin():
+def test_extract_top_items_skips_missing_asin():
     organic = [{"title": "No ASIN"}, {"asin": "B001"}, {"asin": "B002"}]
-    result = extract_top_asins(organic, max_items=10)
+    result = extract_top_items(organic, max_items=10)
     assert len(result) == 2
     assert result[0] == (1, "B001")
     assert result[1] == (2, "B002")
 
 
-def test_extract_top_asins_empty_list():
-    assert extract_top_asins([], max_items=10) == []
+def test_extract_top_items_empty_list():
+    assert extract_top_items([], max_items=10) == []
 
 
 # ── cache_lookup_search ───────────────────────────────────────────────────────
