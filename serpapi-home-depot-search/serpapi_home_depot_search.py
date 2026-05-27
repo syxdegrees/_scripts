@@ -60,9 +60,15 @@ REVIEWS_JSONB_COLS = {
 }
 
 # Scalar columns in serpapi_home_depot_reviews_cache (stored natively, not as JSON strings).
+# total_count maps FROM the API field "total_review" (Home Depot's name for it).
 REVIEWS_SCALAR_COLS = {
     "overall_rating",
     "total_count",
+}
+
+# API field name → DB column name for scalars that don't match 1:1.
+_REVIEWS_SCALAR_MAP = {
+    "total_review": "total_count",  # API calls it total_review; column is total_count
 }
 
 
@@ -299,8 +305,11 @@ def store_reviews_result(config, item_id, domain, review_pages, api_response) ->
         "domain": domain,
         "review_pages": review_pages,
     }
+    for api_key, db_col in _REVIEWS_SCALAR_MAP.items():
+        if api_key in cleaned:
+            row[db_col] = cleaned[api_key]
     for col in REVIEWS_SCALAR_COLS:
-        if col in cleaned:
+        if col not in row and col in cleaned:
             row[col] = cleaned[col]
     for col in REVIEWS_JSONB_COLS:
         if col in cleaned:

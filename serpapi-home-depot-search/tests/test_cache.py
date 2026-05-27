@@ -359,7 +359,7 @@ def test_store_reviews_result_maps_scalar_and_jsonb_columns(monkeypatch):
     product = {"title": "Circular Saw", "url": "https://homedepot.com/p/123"}
     api_response = {
         "overall_rating": 4.5,
-        "total_count": 1200,
+        "total_review": 1200,  # API field name; stored in DB column "total_count"
         "ratings": ratings,
         "reviews": reviews,
         "product": product,
