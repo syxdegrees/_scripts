@@ -28,7 +28,7 @@ VALID_DOMAINS = {
     "amazon.in", "amazon.com.au", "amazon.com.mx",
 }
 
-# Columns in amazon_search_cache that hold API section data (nullable JSONB).
+# Columns in serpapi_amazon_search_cache that hold API section data (nullable JSONB).
 # Keys match both the SerpAPI response keys and the Supabase column names.
 SEARCH_SECTION_COLS = {
     "search_information",
@@ -42,7 +42,7 @@ SEARCH_SECTION_COLS = {
     "filters",
 }
 
-# Columns in amazon_product_cache that hold API section data (nullable JSONB).
+# Columns in serpapi_amazon_product_cache that hold API section data (nullable JSONB).
 PRODUCT_SECTION_COLS = {
     "product_results",
     "purchase_options",
@@ -205,7 +205,7 @@ def cache_lookup_search(config, search_phrase, country, pages, ttl_days) -> dict
     Return the most recent fresh amazon_search_cache row, or None.
     Fresh = fetched_at within ttl_days.
     """
-    rows = _supabase_get(config, "amazon_search_cache", {
+    rows = _supabase_get(config, "serpapi_amazon_search_cache", {
         "search_phrase": f"eq.{search_phrase}",
         "country": f"eq.{country}",
         "pages": f"eq.{pages}",
@@ -220,7 +220,7 @@ def cache_lookup_product(config, asin, country, ttl_days) -> dict | None:
     """
     Return the most recent fresh amazon_product_cache row for this ASIN, or None.
     """
-    rows = _supabase_get(config, "amazon_product_cache", {
+    rows = _supabase_get(config, "serpapi_amazon_product_cache", {
         "asin": f"eq.{asin}",
         "country": f"eq.{country}",
         "fetched_at": f"gt.{_ttl_cutoff(ttl_days)}",
@@ -246,7 +246,7 @@ def store_search_result(config, search_phrase, country, pages, api_response) -> 
     for col in SEARCH_SECTION_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "amazon_search_cache", row)
+    inserted = _supabase_post(config, "serpapi_amazon_search_cache", row)
     return inserted["id"]
 
 
@@ -263,7 +263,7 @@ def store_product_result(config, asin, country, api_response) -> str:
     for col in PRODUCT_SECTION_COLS:
         if col in cleaned:
             row[col] = json.dumps(cleaned[col])
-    inserted = _supabase_post(config, "amazon_product_cache", row)
+    inserted = _supabase_post(config, "serpapi_amazon_product_cache", row)
     return inserted["id"]
 
 
@@ -274,7 +274,7 @@ def store_search_product_link(config, search_cache_id, product_cache_id, positio
     if the link already exists the insert will error — callers should
     check for existing links before calling, or handle the exception.
     """
-    _supabase_post(config, "amazon_search_product_link", {
+    _supabase_post(config, "serpapi_amazon_search_product_link", {
         "search_cache_id": search_cache_id,
         "product_cache_id": product_cache_id,
         "position": position,
