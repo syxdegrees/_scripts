@@ -3,3 +3,6 @@
 __pycache__/
 *.pyc
 .DS_Store
+**/tests/*.csv
+**/supabase/.temp/
+.pytest_cache/
