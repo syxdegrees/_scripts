@@ -221,3 +221,353 @@ def test_jobs_parse_unmapped_captured():
     response = {"search_metadata": {}, "search_parameters": {}, "new_section": {"x": 1}}
     _, unmapped = gj_parse(response)
     assert unmapped == {"new_section": {"x": 1}}
+
+
+# ── google_local ──────────────────────────────────────────────────────────────
+
+from engines.google_local import build_params as gl_build_params, _parse_response as gl_parse
+
+def test_local_build_params_required():
+    p = gl_build_params("coffee", "us", "en", None, 1)
+    assert p["engine"] == "google_local"
+    assert p["q"] == "coffee"
+    assert p["gl"] == "us"
+    assert p["hl"] == "en"
+    assert p["pages"] == 1
+
+def test_local_build_params_with_location():
+    p = gl_build_params("coffee", "us", "en", "Austin, Texas", 1)
+    assert p["location"] == "Austin, Texas"
+
+def test_local_build_params_no_location_omits_key():
+    p = gl_build_params("coffee", "us", "en", None, 1)
+    assert "location" not in p
+
+def test_local_parse_strips_metadata():
+    response = {"search_metadata": {}, "search_parameters": {}, "local_results": []}
+    sections, _ = gl_parse(response)
+    assert "search_metadata" not in sections
+
+def test_local_parse_maps_local_results():
+    results = [{"title": "Cafe One"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "local_results": results}
+    sections, _ = gl_parse(response)
+    assert sections["local_results"] == results
+
+def test_local_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "extra": {"x": 1}}
+    _, unmapped = gl_parse(response)
+    assert unmapped == {"extra": {"x": 1}}
+
+
+# ── google_maps ───────────────────────────────────────────────────────────────
+
+from engines.google_maps import build_params as gm_build_params, _parse_response as gm_parse
+
+def test_maps_build_params_type_search_hardcoded():
+    p = gm_build_params("coffee", "us", "en", None, 1)
+    assert p["engine"] == "google_maps"
+    assert p["type"] == "search"
+
+def test_maps_build_params_with_ll():
+    p = gm_build_params("coffee", "us", "en", None, 1, ll="@40.7455096,-74.0083012,14z")
+    assert p["ll"] == "@40.7455096,-74.0083012,14z"
+
+def test_maps_build_params_ll_omitted_when_none():
+    p = gm_build_params("coffee", "us", "en", None, 1)
+    assert "ll" not in p
+
+def test_maps_parse_maps_local_results():
+    results = [{"title": "Cafe"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "local_results": results}
+    sections, _ = gm_parse(response)
+    assert sections["local_results"] == results
+
+def test_maps_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "new_key": {"x": 1}}
+    _, unmapped = gm_parse(response)
+    assert unmapped == {"new_key": {"x": 1}}
+
+
+# ── google_maps_autocomplete ──────────────────────────────────────────────────
+
+from engines.google_maps_autocomplete import build_params as gma_build_params, _parse_response as gma_parse
+
+def test_maps_autocomplete_build_params_no_location_no_pages():
+    p = gma_build_params("cafe", "us", "en")
+    assert p["engine"] == "google_maps_autocomplete"
+    assert "location" not in p
+    assert "pages" not in p
+
+def test_maps_autocomplete_build_params_gl_hl():
+    p = gma_build_params("cafe", "gb", "en")
+    assert p["gl"] == "gb"
+    assert p["hl"] == "en"
+
+def test_maps_autocomplete_parse_maps_suggestions():
+    sug = [{"value": "cafe near me"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "search_information": {}, "suggestions": sug}
+    sections, _ = gma_parse(response)
+    assert sections["suggestions"] == sug
+
+def test_maps_autocomplete_parse_strips_search_information():
+    response = {"search_metadata": {}, "search_parameters": {}, "search_information": {"q": "cafe"}, "suggestions": []}
+    sections, unmapped = gma_parse(response)
+    assert "search_information" not in sections
+    assert unmapped is None
+
+
+# ── google_news_light ─────────────────────────────────────────────────────────
+
+from engines.google_news_light import build_params as gnl_build_params, _parse_response as gnl_parse
+
+def test_news_build_params_required():
+    p = gnl_build_params("coffee", "us", "en", None, 1)
+    assert p["engine"] == "google_news_light"
+    assert p["q"] == "coffee"
+    assert p["pages"] == 1
+
+def test_news_build_params_with_location():
+    p = gnl_build_params("coffee", "us", "en", "Austin, Texas", 1)
+    assert p["location"] == "Austin, Texas"
+
+def test_news_build_params_no_location_omits_key():
+    p = gnl_build_params("coffee", "us", "en", None, 1)
+    assert "location" not in p
+
+def test_news_parse_maps_news_results():
+    results = [{"title": "Coffee News", "link": "https://example.com"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "news_results": results}
+    sections, _ = gnl_parse(response)
+    assert sections["news_results"] == results
+
+def test_news_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "extra": {"k": "v"}}
+    _, unmapped = gnl_parse(response)
+    assert unmapped == {"extra": {"k": "v"}}
+
+
+# ── google_patents ────────────────────────────────────────────────────────────
+
+from engines.google_patents import build_params as gp_build_params, _parse_response as gp_parse
+
+def test_patents_build_params_required():
+    p = gp_build_params("machine learning", "us", "en", None, 1)
+    assert p["engine"] == "google_patents"
+    assert p["q"] == "machine learning"
+
+def test_patents_build_params_cluster_omitted_when_false():
+    p = gp_build_params("ml", "us", "en", None, 1, cluster=False)
+    assert "cluster" not in p
+
+def test_patents_build_params_cluster_included_when_true():
+    p = gp_build_params("ml", "us", "en", None, 1, cluster=True)
+    assert p["cluster"] == "true"
+
+def test_patents_parse_maps_organic_results():
+    results = [{"title": "Patent 1", "patent_id": "US123"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "organic_results": results}
+    sections, _ = gp_parse(response)
+    assert sections["organic_results"] == results
+
+def test_patents_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "extra": {"x": 1}}
+    _, unmapped = gp_parse(response)
+    assert unmapped == {"extra": {"x": 1}}
+
+
+# ── google_play group ─────────────────────────────────────────────────────────
+
+from engines.google_play import build_params as gplay_build_params, _parse_response as gplay_parse
+from engines.google_play_games import build_params as gpgames_build_params
+from engines.google_play_movies import build_params as gpmovies_build_params
+from engines.google_play_books import build_params as gpbooks_build_params
+
+def test_play_build_params_required():
+    p = gplay_build_params("fitness", "us", "en", 1)
+    assert p["engine"] == "google_play"
+    assert p["q"] == "fitness"
+    assert p["gl"] == "us"
+    assert p["hl"] == "en"
+    assert p["pages"] == 1
+
+def test_play_games_engine_name():
+    p = gpgames_build_params("chess", "us", "en", 1)
+    assert p["engine"] == "google_play_games"
+
+def test_play_movies_engine_name():
+    p = gpmovies_build_params("action", "us", "en", 1)
+    assert p["engine"] == "google_play_movies"
+
+def test_play_books_engine_name():
+    p = gpbooks_build_params("python", "us", "en", 1)
+    assert p["engine"] == "google_play_books"
+
+def test_play_parse_maps_organic_results():
+    results = [{"title": "App Section", "items": [{"product_id": "com.example"}]}]
+    response = {"search_metadata": {}, "search_parameters": {}, "organic_results": results}
+    sections, _ = gplay_parse(response)
+    assert sections["organic_results"] == results
+
+def test_play_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "extra": {"x": 1}}
+    _, unmapped = gplay_parse(response)
+    assert unmapped == {"extra": {"x": 1}}
+
+
+# ── google_scholar ────────────────────────────────────────────────────────────
+
+from engines.google_scholar import build_params as gs_build_params, _parse_response as gs_parse
+
+def test_scholar_build_params_required():
+    p = gs_build_params("biology", "us", "en", None, 1)
+    assert p["engine"] == "google_scholar"
+    assert p["q"] == "biology"
+
+def test_scholar_build_params_as_sdt_omitted_when_none():
+    p = gs_build_params("biology", "us", "en", None, 1)
+    assert "as_sdt" not in p
+
+def test_scholar_build_params_as_sdt_included_when_set():
+    p = gs_build_params("machine learning", "us", "en", None, 1, as_sdt="4")
+    assert p["as_sdt"] == "4"
+
+def test_scholar_parse_maps_organic_results():
+    results = [{"title": "A Study", "link": "https://scholar.google.com"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "organic_results": results}
+    sections, _ = gs_parse(response)
+    assert sections["organic_results"] == results
+
+def test_scholar_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "extra": {"x": 1}}
+    _, unmapped = gs_parse(response)
+    assert unmapped == {"extra": {"x": 1}}
+
+
+# ── google_shopping_light ─────────────────────────────────────────────────────
+
+from engines.google_shopping_light import build_params as gsl_build_params, _parse_response as gsl_parse
+
+def test_shopping_build_params_required():
+    p = gsl_build_params("headphones", "us", "en", 1)
+    assert p["engine"] == "google_shopping_light"
+    assert p["q"] == "headphones"
+
+def test_shopping_parse_maps_inline_shopping_results():
+    results = [{"title": "Sony Headphones", "price": "$99"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "inline_shopping_results": results}
+    sections, _ = gsl_parse(response)
+    assert sections["inline_shopping_results"] == results
+
+def test_shopping_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "extra": {"x": 1}}
+    _, unmapped = gsl_parse(response)
+    assert unmapped == {"extra": {"x": 1}}
+
+
+# ── google_videos_light ───────────────────────────────────────────────────────
+
+from engines.google_videos_light import build_params as gvl_build_params, _parse_response as gvl_parse
+
+def test_videos_build_params_required():
+    p = gvl_build_params("coffee brewing", "us", "en", 1)
+    assert p["engine"] == "google_videos_light"
+    assert p["q"] == "coffee brewing"
+
+def test_videos_parse_maps_video_results():
+    results = [{"title": "Coffee Tutorial", "link": "https://youtube.com"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "video_results": results}
+    sections, _ = gvl_parse(response)
+    assert sections["video_results"] == results
+
+def test_videos_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "extra": {"x": 1}}
+    _, unmapped = gvl_parse(response)
+    assert unmapped == {"extra": {"x": 1}}
+
+
+# ── google_short_videos ───────────────────────────────────────────────────────
+
+from engines.google_short_videos import build_params as gsv_build_params, _parse_response as gsv_parse
+
+def test_short_videos_build_params_no_location_no_pages():
+    p = gsv_build_params("coffee", "us", "en")
+    assert p["engine"] == "google_short_videos"
+    assert "location" not in p
+    assert "pages" not in p
+
+def test_short_videos_parse_maps_short_video_results():
+    results = [{"title": "Coffee Short", "channel": "CafeChan"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "short_video_results": results}
+    sections, _ = gsv_parse(response)
+    assert sections["short_video_results"] == results
+
+def test_short_videos_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "extra": {"x": 1}}
+    _, unmapped = gsv_parse(response)
+    assert unmapped == {"extra": {"x": 1}}
+
+
+# ── google_trends ─────────────────────────────────────────────────────────────
+
+from engines.google_trends import build_params as gt_build_params, _parse_response as gt_parse
+
+def test_trends_build_params_default_data_type():
+    p = gt_build_params("coffee")
+    assert p["engine"] == "google_trends"
+    assert p["data_type"] == "TIMESERIES"
+    assert "tz" not in p
+
+def test_trends_build_params_custom_data_type():
+    p = gt_build_params("coffee", data_type="GEO_MAP_0")
+    assert p["data_type"] == "GEO_MAP_0"
+
+def test_trends_build_params_tz_included_when_set():
+    p = gt_build_params("coffee", tz=-300)
+    assert p["tz"] == -300
+
+def test_trends_build_params_tz_omitted_when_none():
+    p = gt_build_params("coffee")
+    assert "tz" not in p
+
+def test_trends_parse_maps_interest_over_time():
+    data = {"timeline_data": [{"date": "May 2025", "values": [{"value": 75}]}]}
+    response = {"search_metadata": {}, "search_parameters": {}, "interest_over_time": data}
+    sections, _ = gt_parse(response)
+    assert sections["interest_over_time"] == data
+
+def test_trends_parse_maps_related_queries():
+    data = {"rising": [{"query": "cold brew", "value": "Breakout"}]}
+    response = {"search_metadata": {}, "search_parameters": {}, "related_queries": data}
+    sections, _ = gt_parse(response)
+    assert sections["related_queries"] == data
+
+def test_trends_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "extra": {"x": 1}}
+    _, unmapped = gt_parse(response)
+    assert unmapped == {"extra": {"x": 1}}
+
+
+# ── google_trends_autocomplete ────────────────────────────────────────────────
+
+from engines.google_trends_autocomplete import build_params as gta_build_params, _parse_response as gta_parse
+
+def test_trends_autocomplete_build_params_only_q():
+    p = gta_build_params("coffee")
+    assert p["engine"] == "google_trends_autocomplete"
+    assert p["q"] == "coffee"
+    assert "gl" not in p
+    assert "hl" not in p
+    assert "pages" not in p
+
+def test_trends_autocomplete_parse_maps_suggestions():
+    sug = [{"value": "coffee maker", "type": "query"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "search_information": {}, "suggestions": sug}
+    sections, _ = gta_parse(response)
+    assert sections["suggestions"] == sug
+
+def test_trends_autocomplete_parse_strips_search_information():
+    response = {"search_metadata": {}, "search_parameters": {}, "search_information": {"q": "coffee"}, "suggestions": []}
+    sections, unmapped = gta_parse(response)
+    assert "search_information" not in sections
+    assert unmapped is None
