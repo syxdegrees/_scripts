@@ -187,3 +187,37 @@ def test_forums_parse_unmapped_captured():
     response = {"search_metadata": {}, "search_parameters": {}, "extra": {"k": "v"}}
     _, unmapped = gf_parse(response)
     assert unmapped == {"extra": {"k": "v"}}
+
+
+# ── google_jobs ───────────────────────────────────────────────────────────────
+
+from engines.google_jobs import build_params as gj_build_params, _parse_response as gj_parse
+
+def test_jobs_build_params_required():
+    p = gj_build_params("software engineer", "us", "en", None, 2)
+    assert p["engine"] == "google_jobs"
+    assert p["q"] == "software engineer"
+    assert p["pages"] == 2
+
+def test_jobs_build_params_lrad():
+    p = gj_build_params("software engineer", "us", "en", None, 1, lrad=50)
+    assert p["lrad"] == 50
+
+def test_jobs_build_params_lrad_omitted_when_none():
+    p = gj_build_params("software engineer", "us", "en", None, 1)
+    assert "lrad" not in p
+
+def test_jobs_build_params_with_location():
+    p = gj_build_params("software engineer", "us", "en", "Austin, Texas", 1)
+    assert p["location"] == "Austin, Texas"
+
+def test_jobs_parse_maps_jobs_results():
+    jobs = [{"title": "Engineer", "company_name": "Acme"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "jobs_results": jobs}
+    sections, _ = gj_parse(response)
+    assert sections["jobs_results"] == jobs
+
+def test_jobs_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "new_section": {"x": 1}}
+    _, unmapped = gj_parse(response)
+    assert unmapped == {"new_section": {"x": 1}}
