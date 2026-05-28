@@ -105,3 +105,43 @@ def test_ai_mode_parse_maps_references():
     response = {"search_metadata": {}, "search_parameters": {}, "references": refs}
     sections, _ = ai_parse(response)
     assert sections["references"] == refs
+
+
+# ── google_autocomplete ───────────────────────────────────────────────────────
+
+from engines.google_autocomplete import build_params as ac_build_params, _parse_response as ac_parse
+
+def test_autocomplete_build_params_no_location_no_pages():
+    p = ac_build_params("coffee", "us", "en")
+    assert p["engine"] == "google_autocomplete"
+    assert p["client"] == "chrome"
+    assert "location" not in p
+    assert "pages" not in p
+
+def test_autocomplete_build_params_correct_keys():
+    p = ac_build_params("cof", "gb", "en")
+    assert p["gl"] == "gb"
+    assert p["hl"] == "en"
+    assert p["q"] == "cof"
+
+def test_autocomplete_parse_maps_suggestions():
+    sug = [{"value": "coffee near me", "relevance": 1250}]
+    response = {"search_metadata": {}, "search_parameters": {}, "search_information": {}, "suggestions": sug}
+    sections, _ = ac_parse(response)
+    assert sections["suggestions"] == sug
+
+def test_autocomplete_parse_maps_verbatim_relevance():
+    response = {"search_metadata": {}, "search_parameters": {}, "search_information": {}, "verbatim_relevance": 1337}
+    sections, _ = ac_parse(response)
+    assert sections["verbatim_relevance"] == 1337
+
+def test_autocomplete_parse_strips_search_information():
+    response = {"search_metadata": {}, "search_parameters": {}, "search_information": {"query": "coffee"}, "suggestions": []}
+    sections, unmapped = ac_parse(response)
+    assert "search_information" not in sections
+    assert unmapped is None
+
+def test_autocomplete_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "search_information": {}, "unknown_section": {"x": 1}}
+    _, unmapped = ac_parse(response)
+    assert unmapped == {"unknown_section": {"x": 1}}
