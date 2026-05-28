@@ -5,7 +5,7 @@ from shared.retry import with_retry
 
 TABLE = "serpapi_google_short_videos_cache"
 
-SECTION_COLS = {"short_video_results", "people_also_search_for"}
+SECTION_COLS = {"search_information", "short_video_results", "serpapi_pagination", "people_also_search_for"}
 _STRIP_KEYS = {"search_metadata", "search_parameters"}
 
 

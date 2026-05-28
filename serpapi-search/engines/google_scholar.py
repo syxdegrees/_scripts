@@ -5,7 +5,7 @@ from shared.retry import with_retry
 
 TABLE = "serpapi_google_scholar_cache"
 
-SECTION_COLS = {"organic_results", "serpapi_pagination"}
+SECTION_COLS = {"search_information", "organic_results", "related_searches", "pagination", "serpapi_pagination"}
 _STRIP_KEYS = {"search_metadata", "search_parameters"}
 
 

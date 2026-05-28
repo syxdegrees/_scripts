@@ -20,11 +20,26 @@ _REFERENCE_DIR = r"C:\Users\jeshj\Desktop\Coding\claude-skills\_shared"
 _STRIP_KEYS = {"search_metadata", "search_parameters"}
 
 _ENGINE_BASE_PARAMS = {
-    "google_light":        {"engine": "google_light", "gl": "us", "hl": "en"},
-    "google_ai_mode":      {"engine": "google_ai_mode", "gl": "us", "hl": "en", "continuable": False},
-    "google_autocomplete": {"engine": "google_autocomplete", "gl": "us", "hl": "en", "client": "chrome"},
-    "google_forums":       {"engine": "google_forums", "gl": "us", "hl": "en"},
-    "google_jobs":         {"engine": "google_jobs", "gl": "us", "hl": "en"},
+    "google_light":               {"engine": "google_light", "gl": "us", "hl": "en"},
+    "google_ai_mode":             {"engine": "google_ai_mode", "gl": "us", "hl": "en", "continuable": False},
+    "google_autocomplete":        {"engine": "google_autocomplete", "gl": "us", "hl": "en", "client": "chrome"},
+    "google_forums":              {"engine": "google_forums", "gl": "us", "hl": "en"},
+    "google_jobs":                {"engine": "google_jobs", "gl": "us", "hl": "en"},
+    "google_local":               {"engine": "google_local", "gl": "us", "hl": "en"},
+    "google_maps":                {"engine": "google_maps", "type": "search", "gl": "us", "hl": "en"},
+    "google_maps_autocomplete":   {"engine": "google_maps_autocomplete", "gl": "us", "hl": "en"},
+    "google_news_light":          {"engine": "google_news_light", "gl": "us", "hl": "en"},
+    "google_patents":             {"engine": "google_patents", "gl": "us", "hl": "en"},
+    "google_play":                {"engine": "google_play", "gl": "us", "hl": "en"},
+    "google_play_games":          {"engine": "google_play_games", "gl": "us", "hl": "en"},
+    "google_play_movies":         {"engine": "google_play_movies", "gl": "us", "hl": "en"},
+    "google_play_books":          {"engine": "google_play_books", "gl": "us", "hl": "en"},
+    "google_scholar":             {"engine": "google_scholar", "gl": "us", "hl": "en"},
+    "google_shopping_light":      {"engine": "google_shopping_light", "gl": "us", "hl": "en"},
+    "google_short_videos":        {"engine": "google_short_videos", "gl": "us", "hl": "en"},
+    "google_trends":              {"engine": "google_trends", "data_type": "TIMESERIES"},
+    "google_trends_autocomplete": {"engine": "google_trends_autocomplete"},
+    "google_videos_light":        {"engine": "google_videos_light", "gl": "us", "hl": "en"},
 }
 
 

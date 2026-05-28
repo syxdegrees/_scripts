@@ -453,11 +453,11 @@ def test_shopping_build_params_required():
     assert p["engine"] == "google_shopping_light"
     assert p["q"] == "headphones"
 
-def test_shopping_parse_maps_inline_shopping_results():
+def test_shopping_parse_maps_shopping_results():
     results = [{"title": "Sony Headphones", "price": "$99"}]
-    response = {"search_metadata": {}, "search_parameters": {}, "inline_shopping_results": results}
+    response = {"search_metadata": {}, "search_parameters": {}, "shopping_results": results}
     sections, _ = gsl_parse(response)
-    assert sections["inline_shopping_results"] == results
+    assert sections["shopping_results"] == results
 
 def test_shopping_parse_unmapped_captured():
     response = {"search_metadata": {}, "search_parameters": {}, "extra": {"x": 1}}

@@ -5,7 +5,7 @@ from shared.retry import with_retry
 
 TABLE = "serpapi_google_shopping_light_cache"
 
-SECTION_COLS = {"inline_shopping_results", "serpapi_pagination"}
+SECTION_COLS = {"search_information", "shopping_results", "categorized_shopping_results", "filters", "serpapi_pagination"}
 _STRIP_KEYS = {"search_metadata", "search_parameters"}
 
 
@@ -41,9 +41,9 @@ def run(api_key, supabase_config, search_phrase, country, language,
         response = with_retry(lambda p=api_params: serpapi_get(api_key, p))
         if page_num == 1:
             combined = response
-        elif "inline_shopping_results" in response:
-            combined["inline_shopping_results"] = (
-                combined.get("inline_shopping_results", []) + response["inline_shopping_results"]
+        elif "shopping_results" in response:
+            combined["shopping_results"] = (
+                combined.get("shopping_results", []) + response["shopping_results"]
             )
 
     sections, unmapped = _parse_response(combined)

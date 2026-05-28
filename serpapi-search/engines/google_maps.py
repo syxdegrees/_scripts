@@ -5,7 +5,7 @@ from shared.retry import with_retry
 
 TABLE = "serpapi_google_maps_cache"
 
-SECTION_COLS = {"local_results", "serpapi_pagination"}
+SECTION_COLS = {"search_information", "local_results", "serpapi_pagination"}
 _STRIP_KEYS = {"search_metadata", "search_parameters"}
 
 
