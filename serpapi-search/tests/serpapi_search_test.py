@@ -27,7 +27,6 @@ _ENGINE_BASE_PARAMS = {
     "google_jobs":                {"engine": "google_jobs", "gl": "us", "hl": "en"},
     "google_local":               {"engine": "google_local", "gl": "us", "hl": "en"},
     "google_maps":                {"engine": "google_maps", "type": "search", "gl": "us", "hl": "en"},
-    "google_maps_autocomplete":   {"engine": "google_maps_autocomplete", "gl": "us", "hl": "en"},
     "google_news_light":          {"engine": "google_news_light", "gl": "us", "hl": "en"},
     "google_patents":             {"engine": "google_patents", "gl": "us", "hl": "en"},
     "google_play":                {"engine": "google_play", "gl": "us", "hl": "en"},

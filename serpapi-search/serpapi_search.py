@@ -14,7 +14,6 @@ import engines.google_forums as google_forums
 import engines.google_jobs as google_jobs
 import engines.google_local as google_local
 import engines.google_maps as google_maps
-import engines.google_maps_autocomplete as google_maps_autocomplete
 import engines.google_news_light as google_news_light
 import engines.google_patents as google_patents
 import engines.google_play as google_play
@@ -36,7 +35,6 @@ _ENGINE_MAP = {
     "google_jobs":                google_jobs,
     "google_local":               google_local,
     "google_maps":                google_maps,
-    "google_maps_autocomplete":   google_maps_autocomplete,
     "google_news_light":          google_news_light,
     "google_patents":             google_patents,
     "google_play":                google_play,
@@ -59,7 +57,6 @@ _TABLE_MAP = {
     "google_jobs":                "serpapi_google_jobs_cache",
     "google_local":               "serpapi_google_local_cache",
     "google_maps":                "serpapi_google_maps_cache",
-    "google_maps_autocomplete":   "serpapi_google_maps_autocomplete_cache",
     "google_news_light":          "serpapi_google_news_light_cache",
     "google_patents":             "serpapi_google_patents_cache",
     "google_play":                "serpapi_google_play_cache",

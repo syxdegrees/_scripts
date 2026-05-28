@@ -289,34 +289,6 @@ def test_maps_parse_unmapped_captured():
     assert unmapped == {"new_key": {"x": 1}}
 
 
-# ── google_maps_autocomplete ──────────────────────────────────────────────────
-
-from engines.google_maps_autocomplete import build_params as gma_build_params, _parse_response as gma_parse
-
-def test_maps_autocomplete_build_params_no_location_no_pages():
-    p = gma_build_params("cafe", "us", "en")
-    assert p["engine"] == "google_maps_autocomplete"
-    assert "location" not in p
-    assert "pages" not in p
-
-def test_maps_autocomplete_build_params_gl_hl():
-    p = gma_build_params("cafe", "gb", "en")
-    assert p["gl"] == "gb"
-    assert p["hl"] == "en"
-
-def test_maps_autocomplete_parse_maps_suggestions():
-    sug = [{"value": "cafe near me"}]
-    response = {"search_metadata": {}, "search_parameters": {}, "search_information": {}, "suggestions": sug}
-    sections, _ = gma_parse(response)
-    assert sections["suggestions"] == sug
-
-def test_maps_autocomplete_parse_strips_search_information():
-    response = {"search_metadata": {}, "search_parameters": {}, "search_information": {"q": "cafe"}, "suggestions": []}
-    sections, unmapped = gma_parse(response)
-    assert "search_information" not in sections
-    assert unmapped is None
-
-
 # ── google_news_light ─────────────────────────────────────────────────────────
 
 from engines.google_news_light import build_params as gnl_build_params, _parse_response as gnl_parse
