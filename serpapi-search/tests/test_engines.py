@@ -69,3 +69,39 @@ def test_light_parse_unmapped_is_none_when_all_known():
     }
     _, unmapped = _parse_response(response)
     assert unmapped is None
+
+
+# ── google_ai_mode ────────────────────────────────────────────────────────────
+
+from engines.google_ai_mode import build_params as ai_build_params, _parse_response as ai_parse
+
+def test_ai_mode_build_params_no_pagination():
+    p = ai_build_params("what is coffee", "us", "en", None)
+    assert p["engine"] == "google_ai_mode"
+    assert p["continuable"] is False
+    assert "pages" not in p
+
+def test_ai_mode_build_params_with_location():
+    p = ai_build_params("what is coffee", "us", "en", "Austin, Texas")
+    assert p["location"] == "Austin, Texas"
+
+def test_ai_mode_build_params_no_location_omits_key():
+    p = ai_build_params("what is coffee", "us", "en", None)
+    assert "location" not in p
+
+def test_ai_mode_parse_strips_metadata():
+    response = {"search_metadata": {}, "search_parameters": {}, "text_blocks": [{"type": "paragraph", "snippet": "..."}]}
+    sections, _ = ai_parse(response)
+    assert "search_metadata" not in sections
+
+def test_ai_mode_parse_maps_text_blocks():
+    payload = [{"type": "paragraph", "snippet": "Coffee is a beverage."}]
+    response = {"search_metadata": {}, "search_parameters": {}, "text_blocks": payload}
+    sections, _ = ai_parse(response)
+    assert sections["text_blocks"] == payload
+
+def test_ai_mode_parse_maps_references():
+    refs = [{"index": 1, "title": "Wikipedia", "link": "https://en.wikipedia.org"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "references": refs}
+    sections, _ = ai_parse(response)
+    assert sections["references"] == refs
