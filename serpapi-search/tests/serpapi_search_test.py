@@ -53,7 +53,10 @@ def load_reference(engine_name):
 
 def _observed_keys(section_data):
     if isinstance(section_data, list) and section_data:
-        return set(section_data[0].keys())
+        first = section_data[0]
+        if isinstance(first, dict):
+            return set(first.keys())
+        return set()
     if isinstance(section_data, dict):
         return set(section_data.keys())
     return set()
