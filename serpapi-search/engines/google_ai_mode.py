@@ -42,7 +42,7 @@ def run(api_key, supabase_config, search_phrase, country, language,
     sections, unmapped = _parse_response(response)
     row = {
         "search_phrase": search_phrase,
-        "params": normalize_params(call_params),
+        "params": json.loads(normalize_params(call_params)),
         **{col: json.dumps(v) if v is not None else None for col, v in sections.items()},
         "unmapped_sections": json.dumps(unmapped) if unmapped else None,
     }
