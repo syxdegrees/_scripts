@@ -10,6 +10,7 @@ _STRIP_KEYS = {"search_metadata", "search_parameters"}
 
 
 def build_params(search_phrase, country, language, location, pages, ll=None):
+    # location string not supported by Maps API — use ll (GPS coords) via engine_params instead
     p = {
         "engine": "google_maps",
         "type": "search",
@@ -18,8 +19,6 @@ def build_params(search_phrase, country, language, location, pages, ll=None):
         "hl": language,
         "pages": pages,
     }
-    if location:
-        p["location"] = location
     if ll:
         p["ll"] = ll
     return p
