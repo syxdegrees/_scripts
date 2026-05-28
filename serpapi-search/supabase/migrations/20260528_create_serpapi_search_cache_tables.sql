@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS serpapi_google_ai_mode_cache (
     params                  jsonb NOT NULL,
     inline_images           jsonb,
     text_blocks             jsonb,
-    references              jsonb,
+    "references"            jsonb,
     reconstructed_markdown  jsonb,
     unmapped_sections       jsonb,
     fetched_at              timestamptz NOT NULL DEFAULT now()
