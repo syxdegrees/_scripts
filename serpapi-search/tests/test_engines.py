@@ -145,3 +145,45 @@ def test_autocomplete_parse_unmapped_captured():
     response = {"search_metadata": {}, "search_parameters": {}, "search_information": {}, "unknown_section": {"x": 1}}
     _, unmapped = ac_parse(response)
     assert unmapped == {"unknown_section": {"x": 1}}
+
+
+# ── google_forums ─────────────────────────────────────────────────────────────
+
+from engines.google_forums import build_params as gf_build_params, _parse_response as gf_parse
+
+def test_forums_build_params_required():
+    p = gf_build_params("coffee reddit", "us", "en", None, 1)
+    assert p["engine"] == "google_forums"
+    assert p["q"] == "coffee reddit"
+    assert p["pages"] == 1
+
+def test_forums_build_params_relative_period():
+    p = gf_build_params("coffee reddit", "us", "en", None, 1, period_unit="m", period_value=3)
+    assert p["period_unit"] == "m"
+    assert p["period_value"] == 3
+    assert "start_date" not in p
+
+def test_forums_build_params_absolute_dates():
+    p = gf_build_params("coffee reddit", "us", "en", None, 1,
+                        start_date="20250101", end_date="20251231")
+    assert p["start_date"] == "20250101"
+    assert p["end_date"] == "20251231"
+    assert "period_unit" not in p
+
+def test_forums_build_params_period_and_date_mutually_exclusive():
+    p = gf_build_params("coffee reddit", "us", "en", None, 1,
+                        period_unit="d", period_value=7,
+                        start_date="20250101")
+    assert "period_unit" in p
+    assert "start_date" not in p
+
+def test_forums_parse_maps_organic_results():
+    results = [{"title": "Post 1", "link": "https://reddit.com/r/coffee"}]
+    response = {"search_metadata": {}, "search_parameters": {}, "organic_results": results}
+    sections, _ = gf_parse(response)
+    assert sections["organic_results"] == results
+
+def test_forums_parse_unmapped_captured():
+    response = {"search_metadata": {}, "search_parameters": {}, "extra": {"k": "v"}}
+    _, unmapped = gf_parse(response)
+    assert unmapped == {"extra": {"k": "v"}}
