@@ -98,6 +98,29 @@ PHRASES: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
+# Query parameter name per engine.
+# Engines not listed here use "q" (the SerpAPI default).
+# ---------------------------------------------------------------------------
+QUERY_PARAM: dict[str, str] = {
+    "amazon": "k",
+    "apple_app_store": "term",
+    "apple_maps": "query",
+    "ebay": "_nkw",
+    "naver": "query",
+    "naver_ai_overview": "query",
+    "walmart": "query",
+    "yahoo": "p",
+    "yahoo_shopping": "p",
+    "yahoo_videos": "p",
+    "yahoo_images": "p",
+    "yandex": "text",
+    "yandex_videos": "text",
+    "yandex_images": "text",
+    "yelp": "find_desc",
+    "youtube": "search_query",
+}
+
+# ---------------------------------------------------------------------------
 # Extra params merged into the API call for engines that need more than q=...
 # ---------------------------------------------------------------------------
 EXTRA_PARAMS: dict[str, dict] = {
@@ -105,8 +128,8 @@ EXTRA_PARAMS: dict[str, dict] = {
     "google_maps_autocomplete": {"ll": "@40.7128,-74.0060,14z"},
     "google_local": {"location": "Austin, Texas, United States"},
     "google_trends": {"data_type": "TIMESERIES"},
-    "yelp": {"location": "Austin, Texas, United States"},
-    "apple_maps": {"ll": "@40.7128,-74.0060,14z"},
+    "yelp": {"find_loc": "Austin, Texas"},
+    "apple_maps": {"location": "Austin, Texas, United States"},
     "duckduckgo_maps": {"location": "Austin, Texas, United States"},
     "bing_maps": {"location": "Austin, Texas, United States"},
 }
@@ -196,9 +219,10 @@ def flatten_value(obj, prefix: str = "") -> dict:
 
 def call_serpapi(engine_id: str, api_key: str, fallback_query: str) -> dict:
     query = PHRASES.get(engine_id, fallback_query)
+    query_param = QUERY_PARAM.get(engine_id, "q")
     params: dict = {
         "engine": engine_id,
-        "q": query,
+        query_param: query,
         "api_key": api_key,
         "no_cache": "true",
     }
@@ -258,7 +282,7 @@ def write_ref_doc(skill_root: Path, engine_id: str, refresh_date: str, data: dic
 
 def write_csv(skill_root: Path, engine_id: str, refresh_date: str, data: dict) -> None:
     slug = engine_to_slug(engine_id)
-    data_dir = skill_root / "_ref" / "data"
+    data_dir = skill_root / "_ref" / "_data"
     data_dir.mkdir(parents=True, exist_ok=True)
     csv_path = data_dir / f"{refresh_date}-serpapi-search-reference-{slug}-data.csv"
 
