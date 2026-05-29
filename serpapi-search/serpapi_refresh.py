@@ -303,7 +303,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if not args.api_key.strip():
-        print(f"ERROR: {args.engine} — SERPAPI_KEY is not set")
+        print(f"ERROR: {args.engine} — SERPAPI_API_KEY is not set")
         sys.exit(1)
 
     skill_root = Path(args.skill_root)
